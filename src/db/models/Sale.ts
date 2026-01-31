@@ -21,6 +21,7 @@ export interface ISale extends Document {
   validatedAt?: Date;
   rejectionReason?: string;
   messageId?: string;
+  confirmationMessageId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,6 +46,7 @@ const SaleSchema = new Schema<ISale>(
     validatedAt: { type: Date },
     rejectionReason: { type: String },
     messageId: { type: String },
+    confirmationMessageId: { type: String },
   },
   { timestamps: true }
 );

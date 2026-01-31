@@ -1,4 +1,4 @@
-import { ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
+import { ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags } from 'discord.js';
 import { Company } from '../../db/models/Company';
 import { Sale } from '../../db/models/Sale';
 import { logger } from '../../utils/logger';
@@ -77,55 +77,97 @@ export async function handleSaleModal(interaction: ModalSubmitInteraction): Prom
 
     await sale.save();
 
+    // Envoyer un message dans le salon ventes de l'entreprise
+    let salesMessageId: string | undefined;
+    let confirmationMessageId: string | undefined;
+    try {
+      const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
+      if (salesChannel && salesChannel.type === ChannelType.GuildText) {
+        const salesEmbed = new EmbedBuilder()
+          .setColor(0xE67E22)
+          .setTitle('⏳ Vente en attente de paiement')
+          .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${plant}**`)
+          .addFields(
+            { name: '👤 Vendeur', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '💰 Montant brut', value: `**${amount.toFixed(2)}** 💰`, inline: true },
+            { name: '📊 Statut', value: '⏳ **En attente de paiement**', inline: true },
+            { name: '🔴 Taxe serveur (prélevée)', value: `${taxes.serverTax.toFixed(2)} 💰\n*${company.type === 'Agricole' ? '20' : (guildConfig?.serverTaxRate || 0.1) * 100}%*`, inline: true },
+            { name: '🏢 Taxe entreprise', value: `${taxes.companyTax.toFixed(2)} 💰\n*${(company.taxCompanyRate * 100).toFixed(0)}%*`, inline: true },
+            { name: '🌍 Taxe pays', value: `${taxes.countryTax.toFixed(2)} 💰\n*${((guildConfig?.countryTaxRate || 0.1) * 100).toFixed(0)}%*`, inline: true },
+            { name: '✅ À payer au vendeur', value: `**${taxes.netAmount.toFixed(2)} 💰**`, inline: false }
+          )
+          .setFooter({ text: `ID: ${saleId}` })
+          .setTimestamp();
+
+        const sentMessage = await salesChannel.send({ embeds: [salesEmbed] });
+        salesMessageId = sentMessage.id;
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'envoyer le message dans le salon ventes: ${error}`);
+    }
+
     // Envoyer un embed de validation dans le channel de confirmations
     try {
       const confirmationChannel = await interaction.guild?.channels.fetch(company.channels.confirmationsChannelId);
       if (confirmationChannel && confirmationChannel.type === ChannelType.GuildText) {
         const validationEmbed = new EmbedBuilder()
-          .setColor(0xffa500) // Orange pour "en attente"
-          .setTitle(`📦 Nouvelle vente à valider`)
+          .setColor(0xE67E22)
+          .setTitle(`⏳ Vente à payer en jeu`)
+          .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${plant}**\n\n⚠️ **Action requise:** Payer manuellement le vendeur en jeu`)
           .addFields(
-            { name: 'Soumis par', value: `<@${interaction.user.id}> (${interaction.user.username})`, inline: true },
-            { name: 'Plante', value: plant, inline: true },
-            { name: 'Montant brut', value: `${amount.toFixed(2)} 💰`, inline: true },
-            { name: 'Taxe serveur', value: `${taxes.serverTax.toFixed(2)} 💰 (${(guildConfig?.serverTaxRate || 0.1) * 100}%)`, inline: true },
-            { name: 'Taxe entreprise', value: `${taxes.companyTax.toFixed(2)} 💰 (${company.taxCompanyRate * 100}%)`, inline: true },
-            { name: 'Taxe pays', value: `${taxes.countryTax.toFixed(2)} 💰 (${(guildConfig?.countryTaxRate || 0.1) * 100}%)`, inline: true },
-            { name: 'Montant net', value: `${taxes.netAmount.toFixed(2)} 💰`, inline: false }
+            { name: '👤 Vendeur', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '💰 Montant brut', value: `**${amount.toFixed(2)} 💰**`, inline: true },
+            { name: '📊 Statut', value: '⏳ **En attente**', inline: true },
+            { name: '🔴 Taxe serveur (prélevée)', value: `${taxes.serverTax.toFixed(2)} 💰\n*${company.type === 'Agricole' ? '20' : (guildConfig?.serverTaxRate || 0.1) * 100}%*`, inline: true },
+            { name: '🏢 Taxe entreprise (à payer)', value: `${taxes.companyTax.toFixed(2)} 💰\n*${(company.taxCompanyRate * 100).toFixed(0)}%*`, inline: true },
+            { name: '🌍 Taxe pays (à payer)', value: `${taxes.countryTax.toFixed(2)} 💰\n*${((guildConfig?.countryTaxRate || 0.1) * 100).toFixed(0)}%*`, inline: true },
+            { name: '💸 Montant à payer au vendeur', value: `**${taxes.netAmount.toFixed(2)} 💰**`, inline: false }
           )
           .setFooter({ text: `ID: ${saleId}` })
           .setTimestamp();
 
         const approveButton = new ButtonBuilder()
           .setCustomId(`sale_approve_${saleId}`)
-          .setLabel('✅ Approuver')
+          .setLabel('✅ Payé')
           .setStyle(ButtonStyle.Success);
 
         const rejectButton = new ButtonBuilder()
           .setCustomId(`sale_reject_${saleId}`)
-          .setLabel('❌ Rejeter')
+          .setLabel('❌ Annuler')
           .setStyle(ButtonStyle.Danger);
 
         const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(approveButton, rejectButton);
 
-        await confirmationChannel.send({ embeds: [validationEmbed], components: [buttonRow] });
+        const sentConfirmation = await confirmationChannel.send({ 
+          content: `<@&${company.roles.ceoRoleId}> <@&${company.roles.managerRoleId}>`,
+          embeds: [validationEmbed], 
+          components: [buttonRow] 
+        });
+        confirmationMessageId = sentConfirmation.id;
       }
     } catch (error) {
       logger.warn(`Impossible d'envoyer le message de validation: ${error}`);
     }
 
+    // Sauvegarder les deux messageIds
+    if (salesMessageId) {
+      sale.messageId = salesMessageId;
+    }
+    if (confirmationMessageId) {
+      sale.confirmationMessageId = confirmationMessageId;
+    }
+    await sale.save();
+
     const embed = new EmbedBuilder()
-      .setColor(0x00aa00)
-      .setTitle('📦 Vente soumise')
+      .setColor(0x5865F2)
+      .setTitle('✅ Vente enregistrée')
+      .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${plant}**\n\nVotre vente a été enregistrée. Le PDG ou un cadre va vous payer en jeu.`)
       .addFields(
-        { name: 'Plante', value: plant, inline: true },
-        { name: 'Montant brut', value: `${amount.toFixed(2)} 💰`, inline: true },
-        { name: 'Taxe serveur', value: `${taxes.serverTax.toFixed(2)} 💰 (${(guildConfig?.serverTaxRate || 0.1) * 100}%)`, inline: true },
-        { name: 'Taxe entreprise', value: `${taxes.companyTax.toFixed(2)} 💰 (${company.taxCompanyRate * 100}%)`, inline: true },
-        { name: 'Taxe pays', value: `${taxes.countryTax.toFixed(2)} 💰 (${(guildConfig?.countryTaxRate || 0.1) * 100}%)`, inline: true },
-        { name: 'Montant net', value: `${taxes.netAmount.toFixed(2)} 💰`, inline: true }
+        { name: '💰 Montant brut', value: `**${amount.toFixed(2)}** 💰`, inline: true },
+        { name: '📊 Taxes prélevées', value: `${(taxes.serverTax + taxes.companyTax + taxes.countryTax).toFixed(2)} 💰`, inline: true },
+        { name: '💸 Vous recevrez', value: `**${taxes.netAmount.toFixed(2)} 💰**`, inline: true }
       )
-      .setFooter({ text: `ID: ${saleId} | En attente de validation` })
+      .setFooter({ text: `ID: ${saleId} • En attente de paiement` })
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });
@@ -150,7 +192,7 @@ export async function handleSaleSelect(interaction: StringSelectMenuInteraction)
 }
 
 async function handleApproveSale(interaction: ButtonInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const customId = interaction.customId;
@@ -180,50 +222,91 @@ async function handleApproveSale(interaction: ButtonInteraction): Promise<void> 
     await sale.save();
 
     const embed = new EmbedBuilder()
-      .setColor(0x00aa00)
-      .setTitle('✅ Vente approuvée')
+      .setColor(0x57F287)
+      .setTitle('✅ Paiement confirmé')
+      .setDescription(`La vente **${sale.plant}** de **${company.emoji} ${company.name}** a été marquée comme payée.\n\n⚠️ Assurez-vous d'avoir payé le vendeur en jeu!`)
       .addFields(
-        { name: 'Montant net', value: `${sale.netAmount.toFixed(2)} 💰`, inline: true }
+        { name: '💰 Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
+        { name: '💸 Payé au vendeur', value: `**${sale.netAmount.toFixed(2)} 💰**`, inline: true }
       )
+      .setFooter({ text: `ID: ${saleId}` })
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });
 
-    // Envoyer un message dans le channel de ventes
+    // Éditer le message dans le salon ventes
     try {
-      const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
-      if (salesChannel && salesChannel.type === ChannelType.GuildText) {
-        const salesEmbed = new EmbedBuilder()
-          .setColor(0x00aa00)
-          .setTitle('✅ Vente approuvée et enregistrée')
-          .addFields(
-            { name: 'Soumis par', value: `<@${sale.submittedBy}>`, inline: true },
-            { name: 'Plante', value: sale.plant, inline: true },
-            { name: 'Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
-            { name: 'Montant net', value: `${sale.netAmount.toFixed(2)} 💰`, inline: true },
-            { name: 'Validé par', value: `<@${interaction.user.id}>`, inline: true }
-          )
-          .setFooter({ text: `ID: ${saleId}` })
-          .setTimestamp();
+      if (sale.messageId) {
+        const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
+        if (salesChannel && salesChannel.type === ChannelType.GuildText) {
+          const salesMessage = await salesChannel.messages.fetch(sale.messageId);
+          
+          const approvedEmbed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle('✅ Vente payée')
+            .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${sale.plant}**`)
+            .addFields(
+              { name: '👤 Vendeur', value: `<@${sale.submittedBy}>`, inline: true },
+              { name: '💰 Montant brut', value: `**${sale.grossAmount.toFixed(2)}** 💰`, inline: true },
+              { name: '📊 Statut', value: '✅ **Payée**', inline: true },
+              { name: '🔴 Taxe serveur (prélevée)', value: `${sale.serverTaxAmount.toFixed(2)} 💰`, inline: true },
+              { name: '🏢 Taxe entreprise', value: `${sale.companyTaxAmount.toFixed(2)} 💰`, inline: true },
+              { name: '🌍 Taxe pays', value: `${sale.countryTaxAmount.toFixed(2)} 💰`, inline: true },
+              { name: '✅ Payé au vendeur', value: `**${sale.netAmount.toFixed(2)} 💰**`, inline: true },
+              { name: '✔️ Payé par', value: `<@${interaction.user.id}>`, inline: true }
+            )
+            .setFooter({ text: `ID: ${saleId}` })
+            .setTimestamp();
 
-        await salesChannel.send({ embeds: [salesEmbed] });
+          await salesMessage.edit({ embeds: [approvedEmbed] });
+        }
       }
     } catch (error) {
-      logger.warn(`Impossible d'envoyer le message dans le channel de ventes: ${error}`);
+      logger.warn(`Impossible d'éditer le message dans le salon ventes: ${error}`);
+    }
+
+    // Éditer le message dans le salon confirmations (retirer les boutons)
+    try {
+      if (sale.confirmationMessageId) {
+        const confirmationChannel = await interaction.guild?.channels.fetch(company.channels.confirmationsChannelId);
+        if (confirmationChannel && confirmationChannel.type === ChannelType.GuildText) {
+          const confirmationMessage = await confirmationChannel.messages.fetch(sale.confirmationMessageId);
+          
+          const approvedConfirmEmbed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle('✅ Vente payée')
+            .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${sale.plant}**`)
+            .addFields(
+              { name: '👤 Vendeur', value: `<@${sale.submittedBy}>`, inline: true },
+              { name: '💰 Montant brut', value: `**${sale.grossAmount.toFixed(2)} 💰**`, inline: true },
+              { name: '📊 Statut', value: '✅ **Payée**', inline: true },
+              { name: '🔴 Taxe serveur (prélevée)', value: `${sale.serverTaxAmount.toFixed(2)} 💰`, inline: true },
+              { name: '🏢 Taxe entreprise', value: `${sale.companyTaxAmount.toFixed(2)} 💰`, inline: true },
+              { name: '🌍 Taxe pays', value: `${sale.countryTaxAmount.toFixed(2)} 💰`, inline: true },
+              { name: '✅ Payé au vendeur', value: `**${sale.netAmount.toFixed(2)} 💰**`, inline: false },
+              { name: '✔️ Payé par', value: `<@${interaction.user.id}>`, inline: true }
+            )
+            .setFooter({ text: `ID: ${saleId}` })
+            .setTimestamp();
+
+          await confirmationMessage.edit({ embeds: [approvedConfirmEmbed], components: [] });
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'éditer le message dans le salon confirmations: ${error}`);
     }
 
     // Envoyer un DM à l'utilisateur qui a soumis la vente
     try {
       const user = await interaction.client.users.fetch(sale.submittedBy);
       const dmEmbed = new EmbedBuilder()
-        .setColor(0x00aa00)
-        .setTitle('✅ Votre vente a été approuvée!')
+        .setColor(0x57F287)
+        .setTitle('✅ Votre vente a été payée!')
+        .setDescription(`**${company.emoji} ${company.name}**\n\n💸 Vous devriez avoir reçu votre paiement en jeu.\nSi ce n'est pas le cas, contactez un responsable.`)
         .addFields(
-          { name: 'Plante', value: sale.plant, inline: true },
-          { name: 'Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
-          { name: 'Montant net crédité', value: `${sale.netAmount.toFixed(2)} 💰`, inline: false },
-          { name: 'Validée par', value: `<@${interaction.user.id}>`, inline: true },
-          { name: 'Serveur', value: interaction.guild?.name || 'Unknown', inline: true }
+          { name: '🌾 Produit', value: sale.plant, inline: true },
+          { name: '💰 Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
+          { name: '💸 Reçu', value: `**${sale.netAmount.toFixed(2)} 💰**`, inline: true }
         )
         .setFooter({ text: `ID: ${saleId}` })
         .setTimestamp();
@@ -241,7 +324,7 @@ async function handleApproveSale(interaction: ButtonInteraction): Promise<void> 
 }
 
 async function handleRejectSale(interaction: ButtonInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const customId = interaction.customId;
@@ -258,6 +341,13 @@ async function handleRejectSale(interaction: ButtonInteraction): Promise<void> {
       return;
     }
 
+    // Récupérer l'entreprise
+    const company = await Company.findOne({ companyId: sale.companyId });
+    if (!company) {
+      await interaction.editReply('❌ Entreprise non trouvée.');
+      return;
+    }
+
     sale.status = 'REJECTED';
     sale.validatedBy = interaction.user.id;
     sale.validatedAt = new Date();
@@ -265,27 +355,85 @@ async function handleRejectSale(interaction: ButtonInteraction): Promise<void> {
     await sale.save();
 
     const embed = new EmbedBuilder()
-      .setColor(0xff0000)
-      .setTitle('❌ Vente refusée')
+      .setColor(0xED4245)
+      .setTitle('❌ Vente annulée')
+      .setDescription(`La vente **${sale.plant}** de **${company.emoji} ${company.name}** a été annulée.`)
       .addFields(
-        { name: 'Montant non crédité', value: `${sale.netAmount.toFixed(2)} 💰`, inline: true }
+        { name: '💰 Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
+        { name: '❌ Non payé', value: `**${sale.netAmount.toFixed(2)} 💰**`, inline: true }
       )
+      .setFooter({ text: `ID: ${saleId}` })
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });
+
+    // Éditer le message dans le salon ventes
+    try {
+      if (sale.messageId) {
+        const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
+        if (salesChannel && salesChannel.type === ChannelType.GuildText) {
+          const salesMessage = await salesChannel.messages.fetch(sale.messageId);
+          
+          const rejectedEmbed = new EmbedBuilder()
+            .setColor(0xED4245)
+            .setTitle('❌ Vente refusée')
+            .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${sale.plant}**`)
+            .addFields(
+              { name: '👤 Soumis par', value: `<@${sale.submittedBy}>`, inline: true },
+              { name: '💰 Montant', value: `**${sale.grossAmount.toFixed(2)}** 💰`, inline: true },
+              { name: '📊 Statut', value: '❌ **Refusée**', inline: true },
+              { name: '\u200B', value: '\u200B', inline: false },
+              { name: '❌ Refusée par', value: `<@${interaction.user.id}>`, inline: false }
+            )
+            .setFooter({ text: `ID: ${saleId}` })
+            .setTimestamp();
+
+          await salesMessage.edit({ embeds: [rejectedEmbed] });
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'éditer le message dans le salon ventes: ${error}`);
+    }
+
+    // Éditer le message dans le salon confirmations (retirer les boutons)
+    try {
+      if (sale.confirmationMessageId) {
+        const confirmationChannel = await interaction.guild?.channels.fetch(company.channels.confirmationsChannelId);
+        if (confirmationChannel && confirmationChannel.type === ChannelType.GuildText) {
+          const confirmationMessage = await confirmationChannel.messages.fetch(sale.confirmationMessageId);
+          
+          const rejectedConfirmEmbed = new EmbedBuilder()
+            .setColor(0xED4245)
+            .setTitle('❌ Vente annulée')
+            .setDescription(`### ${company.emoji} **${company.name}**\n🌾 **${sale.plant}**`)
+            .addFields(
+              { name: '👤 Vendeur', value: `<@${sale.submittedBy}>`, inline: true },
+              { name: '💰 Montant brut', value: `**${sale.grossAmount.toFixed(2)} 💰**`, inline: true },
+              { name: '📊 Statut', value: '❌ **Annulée**', inline: true },
+              { name: '❌ Montant non payé', value: `**${sale.netAmount.toFixed(2)} 💰**`, inline: false },
+              { name: '❌ Annulée par', value: `<@${interaction.user.id}>`, inline: true }
+            )
+            .setFooter({ text: `ID: ${saleId}` })
+            .setTimestamp();
+
+          await confirmationMessage.edit({ embeds: [rejectedConfirmEmbed], components: [] });
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'éditer le message dans le salon confirmations: ${error}`);
+    }
 
     // Envoyer un DM à l'utilisateur qui a soumis la vente
     try {
       const user = await interaction.client.users.fetch(sale.submittedBy);
       const dmEmbed = new EmbedBuilder()
-        .setColor(0xff0000)
-        .setTitle('❌ Votre vente a été refusée')
+        .setColor(0xED4245)
+        .setTitle('❌ Votre vente a été annulée')
+        .setDescription(`**${company.emoji} ${company.name}**\n\nVotre vente n'a pas été validée par un responsable.\nContactez-les pour plus d'informations.`)
         .addFields(
-          { name: 'Plante', value: sale.plant, inline: true },
-          { name: 'Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
-          { name: 'Montant non crédité', value: `${sale.netAmount.toFixed(2)} 💰`, inline: false },
-          { name: 'Refusée par', value: `<@${interaction.user.id}>`, inline: true },
-          { name: 'Serveur', value: interaction.guild?.name || 'Unknown', inline: true }
+          { name: '🌾 Produit', value: sale.plant, inline: true },
+          { name: '💰 Montant brut', value: `${sale.grossAmount.toFixed(2)} 💰`, inline: true },
+          { name: '❌ Montant non reçu', value: `${sale.netAmount.toFixed(2)} 💰`, inline: true }
         )
         .setFooter({ text: `ID: ${saleId}` })
         .setTimestamp();

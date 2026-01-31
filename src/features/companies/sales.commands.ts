@@ -49,25 +49,47 @@ export async function handleSalesCommand(interaction: any): Promise<void> {
 async function handleSubmitSale(interaction: any): Promise<void> {
   try {
     const guild = interaction.guild;
-    if (!guild) {
+    const member = interaction.member;
+    
+    if (!guild || !member) {
       await interaction.reply('❌ Cette commande doit être utilisée sur un serveur.');
       return;
     }
 
-    // Récupérer toutes les entreprises du serveur
-    const companies = await Company.find({ guildId: guild.id });
+    // Récupérer toutes les entreprises agricoles du serveur
+    const allCompanies = await Company.find({ guildId: guild.id, type: 'Agricole' });
 
-    if (companies.length === 0) {
-      await interaction.reply('❌ Aucune entreprise créée sur ce serveur. Créez d\'abord une entreprise avec `/entreprise creer`.');
+    if (allCompanies.length === 0) {
+      await interaction.reply('❌ Aucune entreprise agricole créée sur ce serveur.');
       return;
     }
 
-    // Créer un select menu pour choisir l'entreprise
+    // Filtrer les entreprises où l'utilisateur a un rôle (CEO, Manager ou Employee)
+    const userCompanies = allCompanies.filter(company => {
+      const hasRole = member.roles.cache.has(company.roles.ceoRoleId) ||
+                      member.roles.cache.has(company.roles.managerRoleId) ||
+                      member.roles.cache.has(company.roles.employeeRoleId);
+      return hasRole;
+    });
+
+    if (userCompanies.length === 0) {
+      await interaction.reply('❌ Vous devez avoir un rôle dans une entreprise agricole pour soumettre une vente.');
+      return;
+    }
+
+    // Si l'utilisateur a un seul rôle d'entreprise, montrer directement le modal
+    if (userCompanies.length === 1) {
+      const modal = createSaleModal(userCompanies[0].companyId);
+      await interaction.showModal(modal);
+      return;
+    }
+
+    // Si plusieurs entreprises, créer un select menu
     const selectMenu = new StringSelectMenuBuilder()
       .setCustomId('sale_company_select')
       .setPlaceholder('Choisir une entreprise')
       .addOptions(
-        companies.map((company) => ({
+        userCompanies.map((company) => ({
           label: `${company.emoji} ${company.name}`,
           value: company.companyId,
           description: `Type: ${company.type}`,
