@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import { generateShortId } from '../../utils/uuid';
 import { calculateSaleTaxes } from './sales.service';
 import { createSaleModal } from './sales.commands';
+import { getCereal } from './cereals';
 
 export async function handleSaleButton(interaction: ButtonInteraction): Promise<void> {
   const [, action] = interaction.customId.split('_');
@@ -22,7 +23,7 @@ export async function handleSaleButton(interaction: ButtonInteraction): Promise<
 }
 
 export async function handleSaleModal(interaction: ModalSubmitInteraction): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const customId = interaction.customId;
@@ -35,6 +36,13 @@ export async function handleSaleModal(interaction: ModalSubmitInteraction): Prom
     const amount = parseFloat(amountStr);
     if (isNaN(amount) || amount <= 0) {
       await interaction.editReply('❌ Le montant doit être un nombre positif.');
+      return;
+    }
+
+    // Valider la céréale
+    const cereal = getCereal(plant);
+    if (!cereal) {
+      await interaction.editReply(`❌ La céréale "${plant}" n'existe pas. Vérifiez l'orthographe et réessayez.`);
       return;
     }
 

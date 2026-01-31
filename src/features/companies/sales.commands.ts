@@ -167,10 +167,12 @@ export function createSaleModal(companyId: string): ModalBuilder {
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()
           .setCustomId('sale_plant')
-          .setLabel('Plante/Produit')
+          .setLabel('Choisir une céréale')
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder('Ex: Blé, Riz, Tomate...')
+          .setPlaceholder('Ex: Blé, Maïs, Kamut (O.G.M)...')
           .setRequired(true)
+          .setMinLength(3)
+          .setMaxLength(30)
       ),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder()

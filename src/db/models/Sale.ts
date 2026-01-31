@@ -17,6 +17,7 @@ export interface ISale extends Document {
   netAmount: number;
   status: SaleStatus;
   countryTaxPaid: boolean;
+  countryTaxPaidAt?: Date;
   validatedBy?: string;
   validatedAt?: Date;
   rejectionReason?: string;
@@ -42,6 +43,7 @@ const SaleSchema = new Schema<ISale>(
     netAmount: { type: Number, required: true },
     status: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
     countryTaxPaid: { type: Boolean, default: false },
+    countryTaxPaidAt: { type: Date },
     validatedBy: { type: String },
     validatedAt: { type: Date },
     rejectionReason: { type: String },

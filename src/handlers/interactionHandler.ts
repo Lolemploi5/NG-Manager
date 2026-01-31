@@ -24,7 +24,7 @@ import {
   handleSaleModal,
   handleSaleSelect,
 } from '../features/companies/sales.interactions';
-import { handleTaxButton } from '../features/taxes/taxes.interactions';
+import { handleTaxButton, handleTaxRateModal, handlePayTaxesModal } from '../features/taxes/taxes.interactions';
 
 export async function handleInteraction(interaction: Interaction): Promise<void> {
   try {
@@ -120,6 +120,10 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
     await handleObjectiveModal(interaction);
   } else if (customId.startsWith('sale_')) {
     await handleSaleModal(interaction);
+  } else if (customId === 'tax_rate_modal') {
+    await handleTaxRateModal(interaction);
+  } else if (customId === 'pay_taxes_modal') {
+    await handlePayTaxesModal(interaction);
   } else {
     await interaction.reply({
       content: '❌ Modal non reconnu.',

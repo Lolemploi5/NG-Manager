@@ -1,28 +1,168 @@
 import cron from 'node-cron';
-import { Client } from 'discord.js';
+import { Client, EmbedBuilder, ChannelType } from 'discord.js';
 import { GuildConfig } from '../../db/models/GuildConfig';
+import { Company } from '../../db/models/Company';
+import { Sale } from '../../db/models/Sale';
 import { logger } from '../../utils/logger';
 
-export function startTaxScheduler(_client: Client): void {
+interface TaxReminderState {
+  [guildId: string]: {
+    messageId?: string;
+    lastUpdate: Date;
+  };
+}
+
+const reminderState: TaxReminderState = {};
+
+export function startTaxScheduler(client: Client): void {
   // Vérifier toutes les heures si des rappels doivent être envoyés
   cron.schedule('0 * * * *', async () => {
     logger.debug('Vérification des rappels d\'impôts...');
-    await checkTaxReminders();
+    await generateTaxReminders(client);
   });
 
   logger.info('📅 Scheduler des impôts démarré');
 }
 
-async function checkTaxReminders(): Promise<void> {
+async function generateTaxReminders(client: Client): Promise<void> {
   try {
-    const configs = await GuildConfig.find({ 'reminders.taxes.enabled': true });
+    const configs = await GuildConfig.find({});
 
     for (const config of configs) {
-      // Logic pour vérifier si un rappel doit être envoyé
-      // basé sur config.reminders.taxes.mode et config.reminders.taxes.every
-      logger.debug(`Vérification des rappels pour ${config.countryName}`);
+      try {
+        const guild = await client.guilds.fetch(config.guildId);
+        if (!guild) continue;
+
+        const taxesChannel = config.channels.taxesChannelId ? guild.channels.cache.get(config.channels.taxesChannelId) : null;
+        if (!taxesChannel || taxesChannel.type !== ChannelType.GuildText) continue;
+
+        // Récupérer les entreprises du serveur
+        const companies = await Company.find({ guildId: config.guildId });
+        if (companies.length === 0) continue;
+
+        // Récupérer les ventes non payées par entreprise
+        const summaryByCompany: any = {};
+        let totalGrandDue = 0;
+
+        for (const company of companies) {
+          const unpaidSales = await Sale.find({
+            companyId: company.companyId,
+            status: 'APPROVED',
+            countryTaxPaid: false,
+          });
+
+          if (unpaidSales.length > 0) {
+            const totalDue = unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
+            summaryByCompany[company.companyId] = {
+              name: company.name,
+              emoji: company.emoji,
+              ceoRoleId: company.roles.ceoRoleId,
+              totalDue,
+              saleCount: unpaidSales.length,
+              saleIds: unpaidSales.map((s: any) => s.saleId),
+            };
+            totalGrandDue += totalDue;
+          }
+        }
+
+        // Si rien à payer, skip
+        if (totalGrandDue === 0) {
+          // Supprimer le message s'il existe
+          if (reminderState[config.guildId]?.messageId) {
+            try {
+              const msg = await taxesChannel.messages.fetch(reminderState[config.guildId].messageId!);
+              await msg.delete();
+              delete reminderState[config.guildId];
+            } catch (e) {
+              // Message déjà supprimé
+            }
+          }
+          continue;
+        }
+
+        // Créer l'embed du rappel
+        const embed = new EmbedBuilder()
+          .setColor(0xE67E22)
+          .setTitle('🏛️ RAPPEL - Taxes Pays à Payer')
+          .setDescription(`Semaine du **${getWeekStartDate()}** au **${getWeekEndDate()}**`)
+          .setThumbnail(guild.iconURL() || null)
+          .addFields({ name: '\u200B', value: '\u200B' }); // Espaceur
+
+        let index = 1;
+        for (const [, data] of Object.entries(summaryByCompany)) {
+          const { name, emoji, totalDue, saleCount } = data as any;
+          embed.addFields({
+            name: `${index}. ${emoji} **${name}**`,
+            value: `**${totalDue.toFixed(2)} 💰** (${saleCount} ventes non payées)`,
+            inline: false,
+          });
+          index++;
+        }
+
+        embed.addFields(
+          { name: '\u200B', value: '\u200B' },
+          {
+            name: '📈 TOTAL À PAYER',
+            value: `**${totalGrandDue.toFixed(2)} 💰**`,
+            inline: false,
+          },
+          {
+            name: '💡 Action',
+            value: 'Utilisez `/impots payer` pour déclarer le paiement',
+            inline: false,
+          }
+        );
+
+        embed.setFooter({ text: 'Mise à jour automatique chaque heure' }).setTimestamp();
+
+        // Ping Chef + Cadres
+        const pingRoles = [config.roles.chefRoleId, config.roles.officerRoleId];
+        const mentions = pingRoles.map((roleId: string) => `<@&${roleId}>`).join(' ');
+
+        // Envoyer ou éditer le message
+        if (reminderState[config.guildId]?.messageId) {
+          try {
+            const existingMsg = await taxesChannel.messages.fetch(reminderState[config.guildId].messageId!);
+            await existingMsg.edit({ content: mentions, embeds: [embed] });
+            reminderState[config.guildId].lastUpdate = new Date();
+          } catch (e) {
+            // Message supprimé, envoyer un nouveau
+            const newMsg = await taxesChannel.send({ content: mentions, embeds: [embed] });
+            reminderState[config.guildId] = {
+              messageId: newMsg.id,
+              lastUpdate: new Date(),
+            };
+          }
+        } else {
+          const newMsg = await taxesChannel.send({ content: mentions, embeds: [embed] });
+          reminderState[config.guildId] = {
+            messageId: newMsg.id,
+            lastUpdate: new Date(),
+          };
+        }
+
+        logger.info(`✅ Rappel d'impôts généré pour ${guild.name}`);
+      } catch (error) {
+        logger.warn(`Erreur pour le serveur ${config.guildId}: ${error}`);
+      }
     }
   } catch (error) {
-    logger.error('Erreur lors de la vérification des rappels:', error);
+    logger.error(`Erreur lors de la génération des rappels: ${error}`);
   }
+}
+
+function getWeekStartDate(): string {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const diff = now.getDate() - dayOfWeek;
+  const monday = new Date(now.setDate(diff));
+  return monday.toLocaleDateString('fr-FR');
+}
+
+function getWeekEndDate(): string {
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const diff = now.getDate() - dayOfWeek + 6;
+  const sunday = new Date(now.setDate(diff));
+  return sunday.toLocaleDateString('fr-FR');
 }
