@@ -17,7 +17,6 @@ import { handleLeaderboardCommand } from '../features/leaderboard/leaderboard.co
 import {
   handleObjectiveButton,
   handleObjectiveModal,
-  handleObjectiveSelect,
 } from '../features/objectives/objectives.interactions';
 import {
   handleSaleButton,
@@ -116,7 +115,7 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
 async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
   const customId = interaction.customId;
 
-  if (customId.startsWith('objective_')) {
+  if (customId.startsWith('objective_') || customId.startsWith('criterion_') || customId.startsWith('contribution_')) {
     await handleObjectiveModal(interaction);
   } else if (customId.startsWith('sale_')) {
     await handleSaleModal(interaction);
@@ -135,9 +134,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
 async function handleSelectMenu(interaction: StringSelectMenuInteraction): Promise<void> {
   const customId = interaction.customId;
 
-  if (customId.startsWith('objective_')) {
-    await handleObjectiveSelect(interaction);
-  } else if (customId.startsWith('sale_')) {
+  if (customId.startsWith('sale_')) {
     await handleSaleSelect(interaction);
   } else {
     await interaction.reply({

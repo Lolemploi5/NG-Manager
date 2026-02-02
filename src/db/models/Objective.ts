@@ -2,8 +2,9 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export type ObjectiveStatus = 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
 export type ObjectivePriority = 1 | 2 | 3 | 4 | 5;
-export type CriterionType = 'BUILD' | 'ITEM' | 'LEVEL' | 'OTHER';
+export type CriterionType = 'BUILD' | 'ITEM' | 'LEVEL' | 'MONEY' | 'RESOURCE' | 'OTHER';
 export type ContributionStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type ObjectiveCategory = 'Économie' | 'Build' | 'Farm' | 'R&D' | 'Militaire/Diplomatie';
 
 export interface IContribution {
   contributionId: string;
@@ -37,14 +38,16 @@ export interface IObjective extends Document {
   title: string;
   description?: string;
   priority: ObjectivePriority;
-  category: string;
+  category: ObjectiveCategory;
   status: ObjectiveStatus;
   deadline?: Date;
   criteria: ICriterion[];
   messageId?: string;
+  channelId?: string;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
+  completedAt?: Date;
 }
 
 const ContributionSchema = new Schema<IContribution>({
@@ -64,7 +67,7 @@ const ContributionSchema = new Schema<IContribution>({
 const CriterionSchema = new Schema<ICriterion>({
   criterionId: { type: String, required: true },
   title: { type: String, required: true },
-  type: { type: String, enum: ['BUILD', 'ITEM', 'LEVEL', 'OTHER'], required: true },
+  type: { type: String, enum: ['BUILD', 'ITEM', 'LEVEL', 'MONEY', 'RESOURCE', 'OTHER'], required: true },
   targetNumber: { type: Number },
   currentProgress: { type: Number, default: 0 },
   unit: { type: String },
@@ -80,12 +83,14 @@ const ObjectiveSchema = new Schema<IObjective>(
     title: { type: String, required: true },
     description: { type: String },
     priority: { type: Number, enum: [1, 2, 3, 4, 5], required: true },
-    category: { type: String, required: true },
+    category: { type: String, enum: ['Économie', 'Build', 'Farm', 'R&D', 'Militaire/Diplomatie'], required: true },
     status: { type: String, enum: ['ACTIVE', 'COMPLETED', 'CANCELLED'], default: 'ACTIVE' },
     deadline: { type: Date },
     criteria: [CriterionSchema],
     messageId: { type: String },
+    channelId: { type: String },
     createdBy: { type: String, required: true },
+    completedAt: { type: Date },
   },
   { timestamps: true }
 );
