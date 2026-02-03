@@ -71,4 +71,21 @@ const GuildConfigSchema = new Schema<IGuildConfig>(
   { timestamps: true }
 );
 
+export interface IDashboardMessage {
+  guildId: string;
+  messageId: string;
+  channelId: string;
+  updatedAt: Date;
+}
+
+const DashboardMessageSchema = new Schema<IDashboardMessage>(
+  {
+    guildId: { type: String, required: true, unique: true, index: true },
+    messageId: { type: String, required: true },
+    channelId: { type: String, required: true },
+  },
+  { timestamps: true }
+);
+
 export const GuildConfig = mongoose.model<IGuildConfig>('GuildConfig', GuildConfigSchema);
+export const DashboardMessage = mongoose.model<IDashboardMessage>('DashboardMessage', DashboardMessageSchema);

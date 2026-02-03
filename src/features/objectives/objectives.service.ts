@@ -1,6 +1,7 @@
 import { Objective, ObjectiveCategory } from '../../db/models/Objective';
+import { DashboardMessage } from '../../db/models/GuildConfig';
 import { generateShortId } from '../../utils/uuid';
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import { logger } from '../../utils/logger';
 
 export class ObjectivesService {
@@ -343,4 +344,40 @@ export class ObjectivesService {
     await objective.save();
     return objective;
   }
-}
+
+  static async updateDashboardMessage(guildId: string, client: any): Promise<void> {
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      if (!guild) return;
+
+      const dashboardData = await DashboardMessage.findOne({ guildId }).lean();
+      if (!dashboardData) return;
+
+      const channel = await guild.channels.fetch(dashboardData.channelId);
+      if (!channel || channel.type !== ChannelType.GuildText) return;
+
+      const message = await channel.messages.fetch(dashboardData.messageId).catch(() => null);
+      if (!message) {
+        // Le message a été supprimé, supprimer la référence
+        await DashboardMessage.deleteOne({ guildId });
+        return;
+      }
+
+      const embed = await this.generateDashboardEmbed(guildId);
+      await message.edit({ embeds: [embed] });
+    } catch (error) {
+      logger.error(`Erreur lors de la mise à jour automatique du dashboard: ${error}`);
+    }
+  }
+
+  static async saveDashboardMessage(guildId: string, messageId: string, channelId: string): Promise<void> {
+    try {
+      await DashboardMessage.findOneAndUpdate(
+        { guildId },
+        { guildId, messageId, channelId },
+        { upsert: true }
+      );
+    } catch (error) {
+      logger.error(`Erreur lors de la sauvegarde du message dashboard: ${error}`);
+    }
+  }}

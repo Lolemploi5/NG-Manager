@@ -110,6 +110,9 @@ async function handleCreateObjectiveModal(interaction: ModalSubmitInteraction): 
         objective.messageId = message.id;
         objective.channelId = objectivesChannel.id;
         await objective.save();
+
+        // Mettre à jour le dashboard automatiquement
+        await ObjectivesService.updateDashboardMessage(guild.id, (global as any).client);
       }
     } catch (error) {
       logger.error(`Erreur lors de l'envoi du message d'objectif: ${error}`);
@@ -197,7 +200,8 @@ async function handleAddCriterionModal(interaction: ModalSubmitInteraction): Pro
 
     // Mettre à jour le message dans le salon
     await updateObjectiveMessage(objective);
-
+    // Mettre à jour le dashboard
+    await ObjectivesService.updateDashboardMessage(interaction.guildId!, (global as any).client);
     await interaction.editReply(`✅ Critère ajouté avec succès!\n**Titre:** ${title}`);
   } catch (error) {
     logger.error(`Erreur lors de l'ajout du critère: ${error}`);
@@ -251,6 +255,9 @@ async function handleContributionModal(interaction: ModalSubmitInteraction): Pro
     const config = await GuildConfig.findOne({ guildId: interaction.guild?.id });
     if (config) {
       await sendContributionNotification(interaction, result, config);
+      
+      // Mettre à jour le dashboard
+      await ObjectivesService.updateDashboardMessage(interaction.guildId!, (global as any).client);
     }
 
     await interaction.editReply(`✅ Contribution soumise avec succès!\n**Quantité:** ${amount}\n\nVotre contribution sera validée par un Chef ou Cadre.`);
@@ -295,6 +302,9 @@ async function handleApproveContribution(interaction: ButtonInteraction): Promis
 
     // Mettre à jour le message original
     await updateObjectiveMessage(objective);
+
+    // Mettre à jour le dashboard automatiquement
+    await ObjectivesService.updateDashboardMessage(guild.id, (global as any).client);
 
     // Mettre à jour le message de validation
     try {
@@ -372,6 +382,9 @@ async function handleRejectContribution(interaction: ButtonInteraction): Promise
     const contributionId = parts[3];
 
     await ObjectivesService.rejectContribution(objectiveId, contributionId, interaction.user.id);
+
+    // Mettre à jour le dashboard automatiquement
+    await ObjectivesService.updateDashboardMessage(guild.id, (global as any).client);
 
     // Mettre à jour le message de validation
     try {

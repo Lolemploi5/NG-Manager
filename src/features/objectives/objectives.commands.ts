@@ -226,11 +226,13 @@ async function handleDashboard(interaction: any): Promise<void> {
     if (dashboardMessage) {
       // Mettre à jour le message existant
       await dashboardMessage.edit({ embeds: [embed] });
+      await ObjectivesService.saveDashboardMessage(guild.id, dashboardMessage.id, objectivesChannel.id);
       await interaction.editReply('✅ Dashboard mis à jour!');
       logger.info(`Dashboard mis à jour pour la guild ${guild.id}`);
     } else {
       // Créer un nouveau message
-      await objectivesChannel.send({ embeds: [embed] });
+      const newMessage = await objectivesChannel.send({ embeds: [embed] });
+      await ObjectivesService.saveDashboardMessage(guild.id, newMessage.id, objectivesChannel.id);
       await interaction.editReply('✅ Dashboard créé et affiché dans le salon objectifs!');
       logger.info(`Nouveau dashboard créé pour la guild ${guild.id}`);
     }
