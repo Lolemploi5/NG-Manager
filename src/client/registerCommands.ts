@@ -4,8 +4,8 @@ import { setupCommands } from '../features/setup/setup.commands';
 import { objectivesCommands } from '../features/objectives/objectives.commands';
 import { companiesCommands } from '../features/companies/companies.commands';
 import { taxesCommands } from '../features/taxes/taxes.commands';
-import { ministryCommands } from '../features/ministry/ministry.commands';
-import { leaderboardCommands } from '../features/leaderboard/leaderboard.commands';
+
+
 
 export async function registerCommands(
   clientId: string,
@@ -17,8 +17,8 @@ export async function registerCommands(
     ...objectivesCommands,
     ...companiesCommands,
     ...taxesCommands,
-    ...ministryCommands,
-    ...leaderboardCommands,
+
+
   ];
 
   const commandsData = commands.map((cmd) => cmd.toJSON());

@@ -11,8 +11,8 @@ import { handleSetupCommand } from '../features/setup/setup.commands';
 import { handleObjectivesCommand } from '../features/objectives/objectives.commands';
 import { handleCompaniesCommand } from '../features/companies/companies.commands';
 import { handleTaxesCommand } from '../features/taxes/taxes.commands';
-import { handleMinistryCommand } from '../features/ministry/ministry.commands';
-import { handleLeaderboardCommand } from '../features/leaderboard/leaderboard.commands';
+
+
 import {
   handleObjectiveButton,
   handleObjectiveModal,
@@ -78,12 +78,9 @@ async function handleChatInputCommand(interaction: ChatInputCommandInteraction):
     case 'impots':
       await handleTaxesCommand(interaction);
       break;
-    case 'poste':
-    case 'organigramme':
-      await handleMinistryCommand(interaction);
-      break;
+
     case 'classement':
-      await handleLeaderboardCommand(interaction);
+
       break;
     default:
       await interaction.reply({
