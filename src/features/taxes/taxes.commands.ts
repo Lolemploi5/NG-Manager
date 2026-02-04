@@ -3,6 +3,7 @@ import { logger } from '../../utils/logger';
 import { GuildConfig } from '../../db/models/GuildConfig';
 import { Company } from '../../db/models/Company';
 import { Sale } from '../../db/models/Sale';
+import { Contract } from '../../db/models/Contract';
 
 export const taxesCommands = [
   new SlashCommandBuilder()
@@ -117,18 +118,31 @@ async function handlePayTaxes(interaction: any): Promise<void> {
     }
 
     // Vérifier s'il y a des taxes à payer
+    let totalDue = 0;
+    let totalItems = 0;
+    
+    // Récupérer les ventes non payées (entreprises Agricole)
     const unpaidSales = await Sale.find({
       companyId: { $in: userCompanies.map(c => c.companyId) },
       status: 'APPROVED',
       countryTaxPaid: false,
     });
 
-    if (unpaidSales.length === 0) {
+    // Récupérer les contrats non payés (entreprises Build)
+    const unpaidContracts = await Contract.find({
+      companyId: { $in: userCompanies.map(c => c.companyId) },
+      status: 'APPROVED',
+      countryTaxPaid: false,
+    });
+
+    totalDue = unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0) +
+               unpaidContracts.reduce((sum, contract) => sum + contract.countryTax, 0);
+    totalItems = unpaidSales.length + unpaidContracts.length;
+
+    if (totalItems === 0) {
       await interaction.reply({ content: '✅ Aucune taxe pays due actuellement.', flags: MessageFlags.Ephemeral });
       return;
     }
-
-    const totalDue = unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
 
     const modal = new ModalBuilder()
       .setCustomId('pay_taxes_modal')
@@ -167,23 +181,48 @@ async function handleResumeTaxes(interaction: any): Promise<void> {
       return;
     }
 
-    // Récupérer les ventes non payées par entreprise
+    // Récupérer les ventes et contrats non payés par entreprise
     const summaryByCompany: any = {};
 
     for (const company of companies) {
-      const unpaidSales = await Sale.find({
-        companyId: company.companyId,
-        status: 'APPROVED',
-        countryTaxPaid: false,
-      });
+      let totalDue = 0;
+      let totalItems = 0;
 
-      if (unpaidSales.length > 0) {
-        const totalDue = unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
+      // Ventes pour entreprises Agricole
+      if (company.type === 'Agricole') {
+        const unpaidSales = await Sale.find({
+          companyId: company.companyId,
+          status: 'APPROVED',
+          countryTaxPaid: false,
+        });
+
+        if (unpaidSales.length > 0) {
+          totalDue += unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
+          totalItems += unpaidSales.length;
+        }
+      }
+
+      // Contrats pour entreprises Build
+      if (company.type === 'Build') {
+        const unpaidContracts = await Contract.find({
+          companyId: company.companyId,
+          status: 'APPROVED',
+          countryTaxPaid: false,
+        });
+
+        if (unpaidContracts.length > 0) {
+          totalDue += unpaidContracts.reduce((sum, contract) => sum + contract.countryTax, 0);
+          totalItems += unpaidContracts.length;
+        }
+      }
+
+      if (totalItems > 0) {
         summaryByCompany[company.companyId] = {
           name: company.name,
           emoji: company.emoji,
+          type: company.type,
           totalDue,
-          saleCount: unpaidSales.length,
+          itemCount: totalItems,
         };
       }
     }
@@ -201,10 +240,11 @@ async function handleResumeTaxes(interaction: any): Promise<void> {
 
     let totalGrand = 0;
     for (const [, data] of Object.entries(summaryByCompany)) {
-      const { name, emoji, totalDue, saleCount } = data as any;
+      const { name, emoji, type, totalDue, itemCount } = data as any;
+      const itemType = type === 'Build' ? 'contrats' : 'ventes';
       embed.addFields({
-        name: `${emoji} ${name}`,
-        value: `**${totalDue.toFixed(2)} 💰** (${saleCount} ventes)`,
+        name: `${emoji} ${name} (${type})`,
+        value: `**${totalDue.toFixed(2)} 💰** (${itemCount} ${itemType} non payées)`,
         inline: false,
       });
       totalGrand += totalDue;

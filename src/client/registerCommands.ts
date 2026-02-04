@@ -3,7 +3,6 @@ import { logger } from '../utils/logger';
 import { setupCommands } from '../features/setup/setup.commands';
 import { objectivesCommands } from '../features/objectives/objectives.commands';
 import { companiesCommands } from '../features/companies/companies.commands';
-import { salesCommands } from '../features/companies/sales.commands';
 import { taxesCommands } from '../features/taxes/taxes.commands';
 import { ministryCommands } from '../features/ministry/ministry.commands';
 import { leaderboardCommands } from '../features/leaderboard/leaderboard.commands';
@@ -17,7 +16,6 @@ export async function registerCommands(
     ...setupCommands,
     ...objectivesCommands,
     ...companiesCommands,
-    ...salesCommands,
     ...taxesCommands,
     ...ministryCommands,
     ...leaderboardCommands,

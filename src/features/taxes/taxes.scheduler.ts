@@ -3,6 +3,7 @@ import { Client, EmbedBuilder, ChannelType } from 'discord.js';
 import { GuildConfig } from '../../db/models/GuildConfig';
 import { Company } from '../../db/models/Company';
 import { Sale } from '../../db/models/Sale';
+import { Contract } from '../../db/models/Contract';
 import { logger } from '../../utils/logger';
 
 interface TaxReminderState {
@@ -45,21 +46,49 @@ async function generateTaxReminders(client: Client): Promise<void> {
         let totalGrandDue = 0;
 
         for (const company of companies) {
-          const unpaidSales = await Sale.find({
-            companyId: company.companyId,
-            status: 'APPROVED',
-            countryTaxPaid: false,
-          });
+          let totalDue = 0;
+          let totalItems = 0;
+          let itemIds: string[] = [];
 
-          if (unpaidSales.length > 0) {
-            const totalDue = unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
+          // Récupérer les ventes non payées (pour les entreprises Agricole)
+          if (company.type === 'Agricole') {
+            const unpaidSales = await Sale.find({
+              companyId: company.companyId,
+              status: 'APPROVED',
+              countryTaxPaid: false,
+            });
+
+            if (unpaidSales.length > 0) {
+              totalDue += unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
+              totalItems += unpaidSales.length;
+              itemIds.push(...unpaidSales.map((s: any) => s.saleId));
+            }
+          }
+
+          // Récupérer les contrats non payés (pour les entreprises Build)
+          if (company.type === 'Build') {
+            const unpaidContracts = await Contract.find({
+              companyId: company.companyId,
+              status: 'APPROVED',
+              countryTaxPaid: false,
+            });
+
+            if (unpaidContracts.length > 0) {
+              totalDue += unpaidContracts.reduce((sum, contract) => sum + contract.countryTax, 0);
+              totalItems += unpaidContracts.length;
+              itemIds.push(...unpaidContracts.map((c: any) => c.contractId));
+            }
+          }
+
+          if (totalItems > 0) {
             summaryByCompany[company.companyId] = {
               name: company.name,
               emoji: company.emoji,
+              type: company.type,
               ceoRoleId: company.roles.ceoRoleId,
               totalDue,
-              saleCount: unpaidSales.length,
-              saleIds: unpaidSales.map((s: any) => s.saleId),
+              itemCount: totalItems,
+              itemIds,
             };
             totalGrandDue += totalDue;
           }
@@ -90,10 +119,11 @@ async function generateTaxReminders(client: Client): Promise<void> {
 
         let index = 1;
         for (const [, data] of Object.entries(summaryByCompany)) {
-          const { name, emoji, totalDue, saleCount } = data as any;
+          const { name, emoji, type, totalDue, itemCount } = data as any;
+          const itemType = type === 'Build' ? 'contrats' : 'ventes';
           embed.addFields({
-            name: `${index}. ${emoji} **${name}**`,
-            value: `**${totalDue.toFixed(2)} 💰** (${saleCount} ventes non payées)`,
+            name: `${index}. ${emoji} **${name}** (${type})`,
+            value: `**${totalDue.toFixed(2)} 💰** (${itemCount} ${itemType} non payées)`,
             inline: false,
           });
           index++;

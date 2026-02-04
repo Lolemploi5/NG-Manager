@@ -1,10 +1,13 @@
-import { ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags } from 'discord.js';
+import { ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { Company } from '../../db/models/Company';
+import { GuildConfig } from '../../db/models/GuildConfig';
 import { Sale } from '../../db/models/Sale';
+import { Contract } from '../../db/models/Contract';
 import { logger } from '../../utils/logger';
 import { generateShortId } from '../../utils/uuid';
 import { calculateSaleTaxes } from './sales.service';
-import { createSaleModal } from './sales.commands';
+import { calculateContractTaxes } from './contracts.service';
+import { createSaleModal } from './companies.commands';
 import { getCereal } from './cereals';
 
 export async function handleSaleButton(interaction: ButtonInteraction): Promise<void> {
@@ -12,10 +15,18 @@ export async function handleSaleButton(interaction: ButtonInteraction): Promise<
 
   switch (action) {
     case 'approve':
-      await handleApproveSale(interaction);
+      if (interaction.customId.startsWith('contract_')) {
+        await handleApproveContract(interaction);
+      } else {
+        await handleApproveSale(interaction);
+      }
       break;
     case 'reject':
-      await handleRejectSale(interaction);
+      if (interaction.customId.startsWith('contract_')) {
+        await handleRejectContract(interaction);
+      } else {
+        await handleRejectSale(interaction);
+      }
       break;
     default:
       await interaction.reply({ content: '❌ Action non reconnue.' });
@@ -23,6 +34,18 @@ export async function handleSaleButton(interaction: ButtonInteraction): Promise<
 }
 
 export async function handleSaleModal(interaction: ModalSubmitInteraction): Promise<void> {
+  if (interaction.customId === 'create_company_modal') {
+    await handleCreateCompanyModal(interaction);
+    return;
+  }
+
+  // Gérer les contrats (entreprises Build)
+  if (interaction.customId.startsWith('contract_modal_')) {
+    await handleContractModal(interaction);
+    return;
+  }
+
+  // Gérer les ventes (entreprises Agricole)
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
@@ -190,12 +213,25 @@ export async function handleSaleSelect(interaction: StringSelectMenuInteraction)
   try {
     const companyId = interaction.values[0];
 
-    // Créer et afficher le modal
-    const modal = createSaleModal(companyId);
-    await interaction.showModal(modal);
+    // Récupérer l'entreprise pour connaître son type
+    const company = await Company.findOne({ companyId });
+    if (!company) {
+      await interaction.reply({ content: '❌ Entreprise non trouvée.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    // Créer et afficher le modal approprié selon le type d'entreprise
+    if (company.type === 'Build') {
+      const { createContractModal } = await import('./companies.commands');
+      const modal = createContractModal(companyId);
+      await interaction.showModal(modal);
+    } else {
+      const modal = createSaleModal(companyId);
+      await interaction.showModal(modal);
+    }
   } catch (error) {
     logger.error(`Erreur lors du select menu: ${error}`);
-    await interaction.reply({ content: '❌ Erreur lors de l\'ouverture du formulaire.' });
+    await interaction.reply({ content: '❌ Erreur lors de l\'ouverture du formulaire.', flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -454,6 +490,533 @@ async function handleRejectSale(interaction: ButtonInteraction): Promise<void> {
     logger.info(`❌ Vente refusée: ${saleId}`);
   } catch (error) {
     logger.error(`Erreur lors du rejet de vente: ${error}`);
+    await interaction.editReply('❌ Erreur lors du rejet.');
+  }
+}
+
+async function handleCreateCompanyModal(interaction: ModalSubmitInteraction): Promise<void> {
+  await interaction.deferReply();
+
+  try {
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.editReply('❌ Cette commande ne peut être utilisée que dans un serveur.');
+      return;
+    }
+
+    const name = interaction.fields.getTextInputValue('company_name');
+    const type = interaction.fields.getTextInputValue('company_type');
+    const emoji = interaction.fields.getTextInputValue('company_emoji') || '🏢';
+    const taxRateStr = interaction.fields.getTextInputValue('company_tax_rate');
+    
+    // Valider le type d'entreprise
+    const validTypes = ['Agricole', 'Build'];
+    if (!validTypes.includes(type)) {
+      await interaction.editReply(`❌ Type d'entreprise invalide. Choisissez parmi: ${validTypes.join(', ')}`);
+      return;
+    }
+    
+    // Valider le taux de taxe
+    let customTaxRate: number | null = null;
+    if (taxRateStr) {
+      customTaxRate = parseFloat(taxRateStr);
+      if (isNaN(customTaxRate) || customTaxRate < 0 || customTaxRate > 1) {
+        await interaction.editReply('❌ Le taux de taxe doit être un nombre entre 0 et 1 (ex: 0.15 pour 15%).');
+        return;
+      }
+    }
+
+    // Créer une catégorie pour l'entreprise
+    const category = await guild.channels.create({
+      name: `${emoji} ${name}`,
+      type: ChannelType.GuildCategory,
+      permissionOverwrites: [
+        {
+          id: guild.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+      ],
+    });
+
+    // Créer les rôles
+    const ceoRole = await guild.roles.create({
+      name: `${emoji} CEO - ${name}`,
+      color: 0xffd700, // Gold
+      permissions: [PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages],
+    });
+
+    const managerRole = await guild.roles.create({
+      name: `${emoji} Manager - ${name}`,
+      color: 0xc0c0c0, // Silver
+      permissions: [PermissionFlagsBits.SendMessages],
+    });
+
+    const employeeRole = await guild.roles.create({
+      name: `${emoji} Employé - ${name}`,
+      color: 0xa9a9a9, // Gray
+      permissions: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.ViewChannel],
+    });
+
+    // Créer les channels
+    const salesChannel = await guild.channels.create({
+      name: `${emoji}-ventes`,
+      type: ChannelType.GuildText,
+      parent: category.id,
+      permissionOverwrites: [
+        {
+          id: guild.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: employeeRole.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        },
+        {
+          id: managerRole.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        },
+        {
+          id: ceoRole.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        },
+      ],
+    });
+
+    const confirmationsChannel = await guild.channels.create({
+      name: `${emoji}-confirmations`,
+      type: ChannelType.GuildText,
+      parent: category.id,
+      permissionOverwrites: [
+        {
+          id: guild.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: ceoRole.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        },
+        {
+          id: managerRole.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+        },
+      ],
+    });
+
+    // Créer l'entreprise en base de données
+    const companyId = generateShortId();
+    const taxRate = customTaxRate ?? 0.1; // 10% par défaut
+
+    const company = new Company({
+      companyId,
+      guildId: guild.id,
+      name,
+      type,
+      emoji,
+      categoryId: category.id,
+      channels: {
+        salesChannelId: salesChannel.id,
+        confirmationsChannelId: confirmationsChannel.id,
+      },
+      roles: {
+        ceoRoleId: ceoRole.id,
+        managerRoleId: managerRole.id,
+        employeeRoleId: employeeRole.id,
+      },
+      taxCompanyRate: taxRate,
+      createdBy: interaction.user.id,
+    });
+
+    await company.save();
+
+    const embed = new EmbedBuilder()
+      .setColor(0xffd700)
+      .setTitle(`${emoji} ${name}`)
+      .setDescription('Entreprise créée avec succès')
+      .addFields(
+        { name: 'Type', value: type, inline: true },
+        { name: 'Taux de taxe', value: `${(taxRate * 100).toFixed(1)}%`, inline: true },
+        { name: 'Catégorie', value: `<#${category.id}>`, inline: false },
+        { name: 'Channel Ventes', value: `<#${salesChannel.id}>`, inline: true },
+        { name: 'Channel Confirmations', value: `<#${confirmationsChannel.id}>`, inline: true },
+        { name: 'CEO', value: `<@&${ceoRole.id}>`, inline: true },
+        { name: 'Manager', value: `<@&${managerRole.id}>`, inline: true },
+        { name: 'Employé', value: `<@&${employeeRole.id}>`, inline: true }
+      )
+      .setFooter({ text: `ID: ${companyId}` })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+    logger.info(`✅ Entreprise créée: ${name} (${companyId}) par ${interaction.user.tag}`);
+  } catch (error) {
+    logger.error(`Erreur lors de la création d'entreprise: ${error}`);
+    await interaction.editReply('❌ Erreur lors de la création de l\'entreprise.');
+  }
+}
+
+async function handleContractModal(interaction: ModalSubmitInteraction): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const customId = interaction.customId;
+    const companyId = customId.replace('contract_modal_', '');
+
+    const client = interaction.fields.getTextInputValue('contract_client');
+    const amountStr = interaction.fields.getTextInputValue('contract_amount');
+    const employeesStr = interaction.fields.getTextInputValue('contract_employees');
+    const description = interaction.fields.getTextInputValue('contract_description') || undefined;
+
+    // Valider le montant
+    const contractAmount = parseFloat(amountStr);
+    if (isNaN(contractAmount) || contractAmount <= 0) {
+      await interaction.editReply('❌ Le montant doit être un nombre positif.');
+      return;
+    }
+
+    // Valider le nombre d'employés
+    const employeeCount = parseInt(employeesStr);
+    if (isNaN(employeeCount) || employeeCount <= 0) {
+      await interaction.editReply('❌ Le nombre d\'employés doit être un nombre entier positif.');
+      return;
+    }
+
+    // Récupérer l'entreprise
+    const company = await Company.findOne({ companyId });
+    if (!company) {
+      await interaction.editReply('❌ Entreprise non trouvée.');
+      return;
+    }
+
+    if (company.guildId !== interaction.guild?.id) {
+      await interaction.editReply('❌ Cette entreprise n\'appartient pas à ce serveur.');
+      return;
+    }
+
+    // Récupérer la config du serveur pour les taux de taxe
+    const guildConfig = await GuildConfig.findOne({ guildId: company.guildId });
+
+    // Calculer les taxes et partages
+    const taxes = await calculateContractTaxes(company.guildId, companyId, contractAmount, employeeCount);
+
+    // Créer le contrat en base de données
+    const contractId = generateShortId();
+    
+    // Déterminer si c'est un client pays ou joueur
+    let clientCountry: string | undefined;
+    let clientPlayer: string | undefined;
+    
+    if (client.startsWith('@')) {
+      clientPlayer = client.substring(1);
+    } else {
+      clientCountry = client;
+    }
+
+    const contract = new Contract({
+      contractId,
+      companyId,
+      guildId: company.guildId,
+      submittedBy: interaction.user.id,
+      clientCountry,
+      clientPlayer,
+      contractAmount,
+      employeeCount,
+      description,
+      grossAmount: taxes.grossAmount,
+      countryTax: taxes.countryTax,
+      companyTax: taxes.companyTax,
+      employeeShare: taxes.employeeShare,
+      perEmployeeAmount: taxes.perEmployeeAmount,
+    });
+
+    await contract.save();
+
+    // Envoyer un message dans le salon ventes de l'entreprise
+    try {
+      const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
+      if (salesChannel && salesChannel.type === ChannelType.GuildText) {
+        const salesEmbed = new EmbedBuilder()
+          .setColor(0x3498DB)
+          .setTitle('⏳ Contrat en attente de paiement')
+          .setDescription(`### ${company.emoji} **${company.name}**\n🏗️ **Contrat Build**`)
+          .addFields(
+            { name: '👤 Soumis par', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '🎯 Client', value: clientCountry || `@${clientPlayer}`, inline: true },
+            { name: '👷 Employés', value: `${employeeCount} participant(s)`, inline: true },
+            { name: '💰 Montant brut', value: `**${contractAmount.toFixed(2)}** 💰`, inline: true },
+            { name: '🏛️ Taxe pays', value: `${taxes.countryTax.toFixed(2)} 💰
+*${((guildConfig?.taxes?.countryTaxRate || 0.1) * 100).toFixed(1)}% du montant brut*`, inline: true },
+            { name: '🏢 Taxe entreprise', value: `${taxes.companyTax.toFixed(2)} 💰
+*${(company.taxCompanyRate * 100).toFixed(1)}% du reste*`, inline: true },
+            { name: '👥 Total employés', value: `${taxes.employeeShare.toFixed(2)} 💰`, inline: true },
+            { name: '💵 Par employé', value: `**${taxes.perEmployeeAmount.toFixed(2)} 💰**`, inline: true },
+            { name: '📊 Statut', value: '⏳ **En attente de paiement**', inline: true }
+          )
+          .setFooter({ text: `ID: ${contractId}` })
+          .setTimestamp();
+
+        if (description) {
+          salesEmbed.addFields({ name: '📝 Description', value: description, inline: false });
+        }
+
+        const sentMessage = await salesChannel.send({ embeds: [salesEmbed] });
+        contract.salesMessageId = sentMessage.id;
+        await contract.save();
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'envoyer le message dans le salon ventes: ${error}`);
+    }
+
+    // Envoyer un message de confirmation dans le salon confirmations pour validation CEO/Manager
+    try {
+      const confirmationChannel = await interaction.guild?.channels.fetch(company.channels.confirmationsChannelId);
+      if (confirmationChannel && confirmationChannel.type === ChannelType.GuildText) {
+        const approveButton = new ButtonBuilder()
+          .setCustomId(`contract_approve_${contractId}`)
+          .setLabel('✅ Approuver')
+          .setStyle(ButtonStyle.Success);
+
+        const rejectButton = new ButtonBuilder()
+          .setCustomId(`contract_reject_${contractId}`)
+          .setLabel('❌ Rejeter')
+          .setStyle(ButtonStyle.Danger);
+
+        const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(approveButton, rejectButton);
+
+        const confirmEmbed = new EmbedBuilder()
+          .setColor(0xF39C12)
+          .setTitle('🔔 Nouveau contrat à valider')
+          .setDescription(`### ${company.emoji} **${company.name}**\n🏗️ **Contrat Build**`)
+          .addFields(
+            { name: '👤 Soumis par', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '🎯 Client', value: clientCountry || `@${clientPlayer}`, inline: true },
+            { name: '👷 Employés', value: `${employeeCount} participant(s)`, inline: true },
+            { name: '💰 Montant brut', value: `**${contractAmount.toFixed(2)}** 💰`, inline: true },
+            { name: '🏛️ Taxe pays', value: `${taxes.countryTax.toFixed(2)} 💰\n*${((guildConfig?.taxes?.countryTaxRate || 0.1) * 100).toFixed(1)}% du montant brut*`, inline: true },
+            { name: '🏢 Taxe entreprise', value: `${taxes.companyTax.toFixed(2)} 💰\n*${(company.taxCompanyRate * 100).toFixed(1)}% du reste*`, inline: true },
+            { name: '👥 Total employés', value: `${taxes.employeeShare.toFixed(2)} 💰`, inline: true },
+            { name: '💵 Par employé', value: `**${taxes.perEmployeeAmount.toFixed(2)} 💰**`, inline: true },
+            { name: '📋 Action requise', value: 'CEO ou Manager doit approuver', inline: true }
+          )
+          .setFooter({ text: `ID: ${contractId} • Cliquez sur les boutons pour valider` })
+          .setTimestamp();
+
+        if (description) {
+          confirmEmbed.addFields({ name: '📝 Description', value: description, inline: false });
+        }
+
+        const sentMessage = await confirmationChannel.send({ embeds: [confirmEmbed], components: [buttonRow] });
+        contract.confirmationMessageId = sentMessage.id;
+        await contract.save();
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'envoyer le message de confirmation: ${error}`);
+    }
+
+    await interaction.editReply(`✅ Contrat soumis avec succès! ID: \`${contractId}\``);
+    logger.info(`📝 Contrat soumis: ${contractId} par ${interaction.user.tag} (${contractAmount} 💰, ${employeeCount} employés)`);
+
+  } catch (error) {
+    logger.error(`Erreur lors de la soumission du contrat: ${error}`);
+    await interaction.editReply('❌ Erreur lors de la soumission du contrat.');
+  }
+}
+
+async function handleApproveContract(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const customId = interaction.customId;
+    const contractId = customId.replace('contract_approve_', '');
+
+    const contract = await Contract.findOne({ contractId });
+    if (!contract) {
+      await interaction.editReply('❌ Contrat non trouvé.');
+      return;
+    }
+
+    if (contract.guildId !== interaction.guild?.id) {
+      await interaction.editReply('❌ Ce contrat n\'appartient pas à ce serveur.');
+      return;
+    }
+
+    if (contract.status !== 'PENDING') {
+      await interaction.editReply('❌ Ce contrat a déjà été traité.');
+      return;
+    }
+
+    const company = await Company.findOne({ companyId: contract.companyId });
+    if (!company) {
+      await interaction.editReply('❌ Entreprise non trouvée.');
+      return;
+    }
+
+    // Vérifier les permissions (CEO ou Manager)
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    const hasCEORole = member?.roles.cache.has(company.roles.ceoRoleId);
+    const hasManagerRole = member?.roles.cache.has(company.roles.managerRoleId);
+
+    if (!hasCEORole && !hasManagerRole) {
+      await interaction.editReply('❌ Seuls les CEO et Managers peuvent approuver les contrats.');
+      return;
+    }
+
+    // Marquer le contrat comme approuvé
+    contract.status = 'APPROVED';
+    contract.approvedBy = interaction.user.id;
+    contract.approvedAt = new Date();
+    await contract.save();
+
+    await interaction.editReply(`✅ Contrat ${contractId} approuvé! Les employés recevront ${contract.perEmployeeAmount.toFixed(2)} 💰 chacun.`);
+
+    // Mettre à jour le message dans le salon ventes
+    try {
+      if (contract.salesMessageId) {
+        const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
+        if (salesChannel && salesChannel.type === ChannelType.GuildText) {
+          const salesMessage = await salesChannel.messages.fetch(contract.salesMessageId);
+          
+          const approvedEmbed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle('✅ Contrat payé')
+            .setDescription(`### ${company.emoji} **${company.name}**\n🏗️ **Contrat Build**`)
+            .addFields(
+              { name: '👤 Soumis par', value: `<@${contract.submittedBy}>`, inline: true },
+              { name: '🎯 Client', value: contract.clientCountry || `@${contract.clientPlayer}`, inline: true },
+              { name: '👷 Employés', value: `${contract.employeeCount} participant(s)`, inline: true },
+              { name: '💰 Montant total', value: `${contract.contractAmount.toFixed(2)} 💰`, inline: true },
+              { name: '💵 Par employé', value: `**${contract.perEmployeeAmount.toFixed(2)} 💰**`, inline: true },
+              { name: '✅ Approuvé par', value: `<@${interaction.user.id}>`, inline: true }
+            )
+            .setFooter({ text: `ID: ${contractId}` })
+            .setTimestamp();
+
+          if (contract.description) {
+            approvedEmbed.addFields({ name: '📝 Description', value: contract.description, inline: false });
+          }
+
+          await salesMessage.edit({ embeds: [approvedEmbed] });
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'éditer le message dans le salon ventes: ${error}`);
+    }
+
+    // Éditer le message dans le salon confirmations (retirer les boutons)
+    try {
+      if (contract.confirmationMessageId) {
+        const confirmationChannel = await interaction.guild?.channels.fetch(company.channels.confirmationsChannelId);
+        if (confirmationChannel && confirmationChannel.type === ChannelType.GuildText) {
+          const confirmationMessage = await confirmationChannel.messages.fetch(contract.confirmationMessageId);
+          
+          const approvedConfirmEmbed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle('✅ Contrat payé')
+            .setDescription(`### ${company.emoji} **${company.name}**\n🏗️ **Contrat Build**`)
+            .addFields(
+              { name: '👤 Soumis par', value: `<@${contract.submittedBy}>`, inline: true },
+              { name: '🎯 Client', value: contract.clientCountry || `@${contract.clientPlayer}`, inline: true },
+              { name: '👷 Employés', value: `${contract.employeeCount} participant(s)`, inline: true },
+              { name: '💰 Montant total', value: `${contract.contractAmount.toFixed(2)} 💰`, inline: true },
+              { name: '💵 Par employé', value: `**${contract.perEmployeeAmount.toFixed(2)} 💰**`, inline: true },
+              { name: '✅ Approuvé par', value: `<@${interaction.user.id}>`, inline: true }
+            )
+            .setFooter({ text: `ID: ${contractId} • Payé le ${new Date().toLocaleDateString('fr-FR')}` })
+            .setTimestamp();
+
+          if (contract.description) {
+            approvedConfirmEmbed.addFields({ name: '📝 Description', value: contract.description, inline: false });
+          }
+
+          await confirmationMessage.edit({ embeds: [approvedConfirmEmbed], components: [] });
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible d'éditer le message de confirmation: ${error}`);
+    }
+
+    logger.info(`✅ Contrat approuvé: ${contractId} par ${interaction.user.tag}`);
+
+  } catch (error) {
+    logger.error(`Erreur lors de l'approbation du contrat: ${error}`);
+    await interaction.editReply('❌ Erreur lors de l\'approbation.');
+  }
+}
+
+async function handleRejectContract(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const customId = interaction.customId;
+    const contractId = customId.replace('contract_reject_', '');
+
+    const contract = await Contract.findOne({ contractId });
+    if (!contract) {
+      await interaction.editReply('❌ Contrat non trouvé.');
+      return;
+    }
+
+    if (contract.guildId !== interaction.guild?.id) {
+      await interaction.editReply('❌ Ce contrat n\'appartient pas à ce serveur.');
+      return;
+    }
+
+    if (contract.status !== 'PENDING') {
+      await interaction.editReply('❌ Ce contrat a déjà été traité.');
+      return;
+    }
+
+    const company = await Company.findOne({ companyId: contract.companyId });
+    if (!company) {
+      await interaction.editReply('❌ Entreprise non trouvée.');
+      return;
+    }
+
+    // Vérifier les permissions (CEO ou Manager)
+    const member = await interaction.guild?.members.fetch(interaction.user.id);
+    const hasCEORole = member?.roles.cache.has(company.roles.ceoRoleId);
+    const hasManagerRole = member?.roles.cache.has(company.roles.managerRoleId);
+
+    if (!hasCEORole && !hasManagerRole) {
+      await interaction.editReply('❌ Seuls les CEO et Managers peuvent rejeter les contrats.');
+      return;
+    }
+
+    // Marquer le contrat comme rejeté
+    contract.status = 'REJECTED';
+    contract.rejectedBy = interaction.user.id;
+    contract.rejectedAt = new Date();
+    await contract.save();
+
+    await interaction.editReply(`❌ Contrat ${contractId} rejeté.`);
+
+    // Supprimer les messages liés au contrat
+    try {
+      if (contract.salesMessageId) {
+        const salesChannel = await interaction.guild?.channels.fetch(company.channels.salesChannelId);
+        if (salesChannel && salesChannel.type === ChannelType.GuildText) {
+          const salesMessage = await salesChannel.messages.fetch(contract.salesMessageId);
+          await salesMessage.delete();
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible de supprimer le message dans le salon ventes: ${error}`);
+    }
+
+    try {
+      if (contract.confirmationMessageId) {
+        const confirmationChannel = await interaction.guild?.channels.fetch(company.channels.confirmationsChannelId);
+        if (confirmationChannel && confirmationChannel.type === ChannelType.GuildText) {
+          const confirmationMessage = await confirmationChannel.messages.fetch(contract.confirmationMessageId);
+          await confirmationMessage.delete();
+        }
+      }
+    } catch (error) {
+      logger.warn(`Impossible de supprimer le message de confirmation: ${error}`);
+    }
+
+    logger.info(`❌ Contrat rejeté: ${contractId} par ${interaction.user.tag}`);
+
+  } catch (error) {
+    logger.error(`Erreur lors du rejet du contrat: ${error}`);
     await interaction.editReply('❌ Erreur lors du rejet.');
   }
 }

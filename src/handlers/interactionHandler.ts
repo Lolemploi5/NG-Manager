@@ -10,7 +10,6 @@ import { logger } from '../utils/logger';
 import { handleSetupCommand } from '../features/setup/setup.commands';
 import { handleObjectivesCommand } from '../features/objectives/objectives.commands';
 import { handleCompaniesCommand } from '../features/companies/companies.commands';
-import { handleSalesCommand } from '../features/companies/sales.commands';
 import { handleTaxesCommand } from '../features/taxes/taxes.commands';
 import { handleMinistryCommand } from '../features/ministry/ministry.commands';
 import { handleLeaderboardCommand } from '../features/leaderboard/leaderboard.commands';
@@ -76,9 +75,6 @@ async function handleChatInputCommand(interaction: ChatInputCommandInteraction):
     case 'entreprise':
       await handleCompaniesCommand(interaction);
       break;
-    case 'vente':
-      await handleSalesCommand(interaction);
-      break;
     case 'impots':
       await handleTaxesCommand(interaction);
       break;
@@ -101,7 +97,7 @@ async function handleButton(interaction: ButtonInteraction): Promise<void> {
 
   if (customId.startsWith('objective_')) {
     await handleObjectiveButton(interaction);
-  } else if (customId.startsWith('sale_')) {
+  } else if (customId.startsWith('sale_') || customId.startsWith('contract_')) {
     await handleSaleButton(interaction);
   } else if (customId.startsWith('tax_')) {
     await handleTaxButton(interaction);
@@ -118,7 +114,7 @@ async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<v
 
   if (customId.startsWith('objective_') || customId.startsWith('criterion_') || customId.startsWith('contribution_')) {
     await handleObjectiveModal(interaction);
-  } else if (customId.startsWith('sale_')) {
+  } else if (customId.startsWith('sale_') || customId === 'create_company_modal' || customId.startsWith('contract_modal_')) {
     await handleSaleModal(interaction);
   } else if (customId === 'tax_rate_modal') {
     await handleTaxRateModal(interaction);

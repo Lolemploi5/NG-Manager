@@ -6,6 +6,7 @@ export interface ITaxRemittance extends Document {
   companyId: string;
   totalAmount: number;
   saleIds: string[];
+  contractIds?: string[];  // Optionnel car les anciennes données n'en ont pas
   paidBy: string;
   paidByName: string;
   paidAt: Date;
@@ -19,6 +20,7 @@ const TaxRemittanceSchema = new Schema<ITaxRemittance>(
     companyId: { type: String, required: true, index: true },
     totalAmount: { type: Number, required: true },
     saleIds: [{ type: String }],
+    contractIds: [{ type: String }],  // Nouveau champ pour les IDs de contrats
     paidBy: { type: String, required: true },
     paidByName: { type: String, required: true },
     paidAt: { type: Date, default: Date.now },

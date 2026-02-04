@@ -2,6 +2,7 @@ import { ButtonInteraction, ModalSubmitInteraction, EmbedBuilder, MessageFlags }
 import { GuildConfig } from '../../db/models/GuildConfig';
 import { Company } from '../../db/models/Company';
 import { Sale } from '../../db/models/Sale';
+import { Contract } from '../../db/models/Contract';
 import { TaxRemittance } from '../../db/models/TaxRemittance';
 import { logger } from '../../utils/logger';
 import { generateShortId } from '../../utils/uuid';
@@ -85,15 +86,15 @@ export async function handlePayTaxesModal(interaction: ModalSubmitInteraction): 
       return;
     }
 
-    const amountStr = interaction.fields.getTextInputValue('amount_paid');
-    const amount = parseFloat(amountStr);
+    const amountPaidStr = interaction.fields.getTextInputValue('amount_paid');
+    const amountPaid = parseFloat(amountPaidStr);
 
-    if (isNaN(amount) || amount <= 0) {
-      await interaction.reply({ content: '❌ Veuillez entrer un montant valide.', flags: MessageFlags.Ephemeral });
+    if (isNaN(amountPaid) || amountPaid <= 0) {
+      await interaction.reply({ content: '❌ Montant invalide.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    // Récupérer les entreprises du PDG
+    // Récupérer les entreprises de l'utilisateur
     const userCompanies = await Company.find({
       guildId,
       createdBy: interaction.user.id,
@@ -104,59 +105,69 @@ export async function handlePayTaxesModal(interaction: ModalSubmitInteraction): 
       return;
     }
 
-    let totalTaxPaid = 0;
-    const remittances: any[] = [];
+    let totalPaid = 0;
+    let paidSales = 0;
+    let paidContracts = 0;
+    const remittances = [];
 
-    // Payer les taxes pour chaque entreprise jusqu'à épuisement du montant
     for (const company of userCompanies) {
-      if (totalTaxPaid >= amount) break;
+      let companyPaid = 0;
+      const saleIds: string[] = [];
+      const contractIds: string[] = [];
 
-      // Récupérer les ventes approuvées non payées
-      const unpaidSales = await Sale.find({
-        companyId: company.companyId,
-        status: 'APPROVED',
-        countryTaxPaid: false,
-      });
+      // Marquer les ventes comme payées (entreprises Agricole)
+      if (company.type === 'Agricole') {
+        const unpaidSales = await Sale.find({
+          companyId: company.companyId,
+          status: 'APPROVED',
+          countryTaxPaid: false,
+        });
 
-      if (unpaidSales.length === 0) continue;
-
-      // Calculer le total dû pour cette entreprise
-      let companyTotalDue = unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
-      const amountToPayForCompany = Math.min(companyTotalDue, amount - totalTaxPaid);
-
-      if (amountToPayForCompany <= 0) continue;
-
-      // Marquer les ventes comme payées
-      let remainingAmount = amountToPayForCompany;
-      const saleIdsForRemittance: string[] = [];
-
-      for (const sale of unpaidSales) {
-        if (remainingAmount <= 0) break;
-
-        const saleCountryTax = sale.countryTaxAmount;
-        if (remainingAmount >= saleCountryTax) {
-          sale.countryTaxPaid = true;
-          sale.countryTaxPaidAt = new Date();
-          saleIdsForRemittance.push(sale.saleId);
-          remainingAmount -= saleCountryTax;
-          totalTaxPaid += saleCountryTax;
-        } else {
-          // Paiement partiel - créer une fraction de remittance
-          totalTaxPaid += remainingAmount;
-          saleIdsForRemittance.push(sale.saleId); // Marquer même si partiel
-          remainingAmount = 0;
+        for (const sale of unpaidSales) {
+          if (totalPaid + sale.countryTaxAmount <= amountPaid) {
+            sale.countryTaxPaid = true;
+            await sale.save();
+            totalPaid += sale.countryTaxAmount;
+            companyPaid += sale.countryTaxAmount;
+            saleIds.push(sale.saleId);
+            paidSales++;
+          } else {
+            break;
+          }
         }
-        await sale.save();
       }
 
-      // Créer une remittance
-      if (saleIdsForRemittance.length > 0) {
+      // Marquer les contrats comme payés (entreprises Build)
+      if (company.type === 'Build') {
+        const unpaidContracts = await Contract.find({
+          companyId: company.companyId,
+          status: 'APPROVED',
+          countryTaxPaid: false,
+        });
+
+        for (const contract of unpaidContracts) {
+          if (totalPaid + contract.countryTax <= amountPaid) {
+            contract.countryTaxPaid = true;
+            await contract.save();
+            totalPaid += contract.countryTax;
+            companyPaid += contract.countryTax;
+            contractIds.push(contract.contractId);
+            paidContracts++;
+          } else {
+            break;
+          }
+        }
+      }
+
+      // Créer une remittance pour cette entreprise
+      if (companyPaid > 0) {
         const remittance = await TaxRemittance.create({
           remittanceId: generateShortId(),
           guildId,
           companyId: company.companyId,
-          totalAmount: amountToPayForCompany,
-          saleIds: saleIdsForRemittance,
+          totalAmount: companyPaid,
+          saleIds,
+          contractIds: contractIds,  // Ajouter les IDs de contrats
           paidBy: interaction.user.id,
           paidByName: interaction.user.username,
           paidAt: new Date(),
@@ -165,7 +176,7 @@ export async function handlePayTaxesModal(interaction: ModalSubmitInteraction): 
       }
     }
 
-    if (remittances.length === 0) {
+    if (totalPaid === 0) {
       await interaction.reply({ content: '❌ Aucune taxe pays due actuellement.', flags: MessageFlags.Ephemeral });
       return;
     }
@@ -174,14 +185,15 @@ export async function handlePayTaxesModal(interaction: ModalSubmitInteraction): 
       .setColor(0x57F287)
       .setTitle('✅ Taxes pays payées')
       .addFields(
-        { name: '💰 Montant payé', value: `**${totalTaxPaid.toFixed(2)} 💰**`, inline: true },
-        { name: '📊 Remises créées', value: `${remittances.length}`, inline: true }
+        { name: '💰 Montant payé', value: `**${totalPaid.toFixed(2)} 💰**`, inline: true },
+        { name: '🏢 Entreprises', value: `${remittances.length}`, inline: true },
+        { name: '📊 Éléments payés', value: `${paidSales} ventes + ${paidContracts} contrats`, inline: true }
       )
-      .setFooter({ text: `Les taxes ont été marquées comme payées` })
+      .setFooter({ text: `Taxes pays marquées comme payées` })
       .setTimestamp();
 
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
-    logger.info(`✅ Taxes pays payées: ${totalTaxPaid.toFixed(2)} 💰 par ${interaction.user.tag}`);
+    logger.info(`✅ Taxes pays payées: ${totalPaid.toFixed(2)} 💰 par ${interaction.user.tag} (${paidSales} ventes, ${paidContracts} contrats)`);
   } catch (error) {
     logger.error(`Erreur lors du paiement des taxes: ${error}`);
     await interaction.reply({ content: '❌ Erreur lors du paiement.', flags: MessageFlags.Ephemeral });

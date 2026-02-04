@@ -1,6 +1,6 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
-export type CompanyType = 'Agricole' | 'Manufacturière' | 'Service' | 'Autre';
+export type CompanyType = 'Agricole' | 'Build';
 
 export interface ICompany extends Document {
   companyId: string;
@@ -29,7 +29,7 @@ const CompanySchema = new Schema<ICompany>(
     companyId: { type: String, required: true, unique: true, index: true },
     guildId: { type: String, required: true, index: true },
     name: { type: String, required: true },
-    type: { type: String, enum: ['Agricole', 'Manufacturière', 'Service', 'Autre'], required: true },
+    type: { type: String, enum: ['Agricole', 'Build'], required: true },
     emoji: { type: String },
     categoryId: { type: String, required: true },
     channels: {

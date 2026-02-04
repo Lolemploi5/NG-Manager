@@ -107,18 +107,18 @@ async function handleCreateObjectiveModal(interaction: ModalSubmitInteraction): 
       status: 'ACTIVE',
     });
 
-    // Envoyer le message dans le salon objectifs
+    // Envoyer le message dans le salon new-objectifs
     try {
-      const objectivesChannel = await guild.channels.fetch(config.channels.objectivesChannelId);
-      if (objectivesChannel && objectivesChannel.type === ChannelType.GuildText) {
+      const newObjectivesChannel = await guild.channels.fetch(config.channels.newObjectivesChannelId);
+      if (newObjectivesChannel && newObjectivesChannel.type === ChannelType.GuildText) {
         const embed = await ObjectivesService.createObjectiveEmbed(objective);
         const buttons = ObjectivesService.createObjectiveButtons(objective);
         
-        const message = await objectivesChannel.send({ embeds: [embed], components: buttons });
+        const message = await newObjectivesChannel.send({ embeds: [embed], components: buttons });
         
         // Sauvegarder le messageId
         objective.messageId = message.id;
-        objective.channelId = objectivesChannel.id;
+        objective.channelId = newObjectivesChannel.id;
         await objective.save();
 
         // Mettre à jour le dashboard automatiquement

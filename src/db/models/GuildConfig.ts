@@ -12,6 +12,8 @@ export interface IGuildConfig extends Document {
   channels: {
     objectivesChannelId: string;
     objectivesValidationChannelId: string;
+    newObjectivesChannelId: string;
+    objectivesCategoryId: string;
     taxesChannelId?: string;
     logsChannelId?: string;
   };
@@ -48,6 +50,8 @@ const GuildConfigSchema = new Schema<IGuildConfig>(
     channels: {
       objectivesChannelId: { type: String, required: true },
       objectivesValidationChannelId: { type: String, required: true },
+      newObjectivesChannelId: { type: String, required: true },
+      objectivesCategoryId: { type: String, required: true },
       taxesChannelId: { type: String },
       logsChannelId: { type: String },
     },
