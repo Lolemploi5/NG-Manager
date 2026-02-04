@@ -17,6 +17,7 @@ import { handleLeaderboardCommand } from '../features/leaderboard/leaderboard.co
 import {
   handleObjectiveButton,
   handleObjectiveModal,
+  handleObjectiveSelect,
 } from '../features/objectives/objectives.interactions';
 import {
   handleSaleButton,
@@ -136,6 +137,8 @@ async function handleSelectMenu(interaction: StringSelectMenuInteraction): Promi
 
   if (customId.startsWith('sale_')) {
     await handleSaleSelect(interaction);
+  } else if (customId === 'objective_select') {
+    await handleObjectiveSelect(interaction);
   } else {
     await interaction.reply({
       content: '❌ Menu non reconnu.',

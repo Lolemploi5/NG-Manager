@@ -1,4 +1,4 @@
-import { ButtonInteraction, ModalSubmitInteraction, EmbedBuilder, MessageFlags, ChannelType, ButtonBuilder, ButtonStyle, ActionRowBuilder } from 'discord.js';
+import { ButtonInteraction, ModalSubmitInteraction, EmbedBuilder, MessageFlags, ChannelType, ButtonBuilder, ButtonStyle, ActionRowBuilder, StringSelectMenuInteraction, StringSelectMenuBuilder } from 'discord.js';
 import { GuildConfig } from '../../db/models/GuildConfig';
 import { ObjectivesService } from './objectives.service';
 import { createCriterionModal, createContributionModal } from './objectives.commands';
@@ -17,8 +17,18 @@ export async function handleObjectiveButton(interaction: ButtonInteraction): Pro
     await handleRejectContribution(interaction);
   } else if (customId.startsWith('objective_view_contributions_')) {
     await handleViewContributions(interaction);
+  } else if (customId.startsWith('objectives_page_')) {
+    await handleObjectivesPageNavigation(interaction);
   } else {
     await interaction.reply({ content: '❌ Action non reconnue.', flags: MessageFlags.Ephemeral });
+  }
+}
+
+export async function handleObjectiveSelect(interaction: StringSelectMenuInteraction): Promise<void> {
+  if (interaction.customId === 'objective_select') {
+    await handleObjectiveSelectMenu(interaction);
+  } else {
+    await interaction.reply({ content: '❌ Sélection non reconnue.', flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -112,7 +122,7 @@ async function handleCreateObjectiveModal(interaction: ModalSubmitInteraction): 
         await objective.save();
 
         // Mettre à jour le dashboard automatiquement
-        await ObjectivesService.updateDashboardMessage(guild.id, (global as any).client);
+        await ObjectivesService.updateDashboardMessage(guild.id);
       }
     } catch (error) {
       logger.error(`Erreur lors de l'envoi du message d'objectif: ${error}`);
@@ -201,7 +211,7 @@ async function handleAddCriterionModal(interaction: ModalSubmitInteraction): Pro
     // Mettre à jour le message dans le salon
     await updateObjectiveMessage(objective);
     // Mettre à jour le dashboard
-    await ObjectivesService.updateDashboardMessage(interaction.guildId!, (global as any).client);
+    await ObjectivesService.updateDashboardMessage(interaction.guildId!);
     await interaction.editReply(`✅ Critère ajouté avec succès!\n**Titre:** ${title}`);
   } catch (error) {
     logger.error(`Erreur lors de l'ajout du critère: ${error}`);
@@ -257,7 +267,7 @@ async function handleContributionModal(interaction: ModalSubmitInteraction): Pro
       await sendContributionNotification(interaction, result, config);
       
       // Mettre à jour le dashboard
-      await ObjectivesService.updateDashboardMessage(interaction.guildId!, (global as any).client);
+      await ObjectivesService.updateDashboardMessage(interaction.guildId!);
     }
 
     await interaction.editReply(`✅ Contribution soumise avec succès!\n**Quantité:** ${amount}\n\nVotre contribution sera validée par un Chef ou Cadre.`);
@@ -304,7 +314,7 @@ async function handleApproveContribution(interaction: ButtonInteraction): Promis
     await updateObjectiveMessage(objective);
 
     // Mettre à jour le dashboard automatiquement
-    await ObjectivesService.updateDashboardMessage(guild.id, (global as any).client);
+    await ObjectivesService.updateDashboardMessage(guild.id);
 
     // Mettre à jour le message de validation
     try {
@@ -340,7 +350,7 @@ async function handleApproveContribution(interaction: ButtonInteraction): Promis
 
     // Vérifier si l'objectif est complété
     if (objective.status === 'COMPLETED') {
-      await announceObjectiveCompletion(guild, objective, config);
+      logger.info(`Objectif ${objective.objectiveId} marqué comme complété!`);
     }
 
     await interaction.editReply('✅ Contribution approuvée!');
@@ -384,7 +394,7 @@ async function handleRejectContribution(interaction: ButtonInteraction): Promise
     await ObjectivesService.rejectContribution(objectiveId, contributionId, interaction.user.id);
 
     // Mettre à jour le dashboard automatiquement
-    await ObjectivesService.updateDashboardMessage(guild.id, (global as any).client);
+    await ObjectivesService.updateDashboardMessage(guild.id);
 
     // Mettre à jour le message de validation
     try {
@@ -471,7 +481,16 @@ async function updateObjectiveMessage(objective: any): Promise<void> {
       return;
     }
 
-    const guild = await (global as any).client?.guilds.fetch(objective.guildId);
+    // Importer le client de manière dynamique pour éviter les dépendances circulaires
+    const { getClient } = await import('../../index');
+    const client = getClient();
+    
+    if (!client) {
+      logger.warn('Client Discord non disponible pour la mise à jour du message d\'objectif');
+      return;
+    }
+
+    const guild = await client.guilds.fetch(objective.guildId);
     if (!guild) return;
 
     const channel = await guild.channels.fetch(objective.channelId);
@@ -484,6 +503,7 @@ async function updateObjectiveMessage(objective: any): Promise<void> {
     const buttons = ObjectivesService.createObjectiveButtons(objective);
 
     await message.edit({ embeds: [embed], components: buttons });
+    logger.info(`Message d'objectif mis à jour pour ${objective.objectiveId}`);
   } catch (error) {
     logger.error(`Erreur lors de la mise à jour du message d'objectif: ${error}`);
   }
@@ -537,27 +557,141 @@ async function sendContributionNotification(interaction: any, result: any, confi
   }
 }
 
-async function announceObjectiveCompletion(guild: any, objective: any, config: any): Promise<void> {
+// Nouveaux handlers pour la navigation interactive des objectifs
+async function handleObjectivesPageNavigation(interaction: ButtonInteraction): Promise<void> {
+  await interaction.deferUpdate();
+
   try {
-    const objectivesChannel = await guild.channels.fetch(config.channels.objectivesChannelId);
-    if (!objectivesChannel || objectivesChannel.type !== ChannelType.GuildText) return;
+    const customId = interaction.customId;
+    const pageNumber = parseInt(customId.split('_').pop() || '0');
+    
+    // Récupérer les objectifs à nouveau (on pourrait optimiser en cachant)
+    const guild = interaction.guild;
+    if (!guild) return;
 
-    const embed = new EmbedBuilder()
-      .setColor(0x57F287)
-      .setTitle('🎉 Objectif complété!')
-      .setDescription(`# ${objective.title}\n\nFélicitations à tous! L'objectif a été complété à 100%!`)
-      .addFields(
-        { name: '🎯 Catégorie', value: objective.category, inline: true },
-        { name: '📅 Complété le', value: `<t:${Math.floor(new Date().getTime() / 1000)}:D>`, inline: true }
-      )
-      .setThumbnail('https://em-content.zobj.net/thumbs/120/twitter/348/party-popper_1f389.png')
-      .setTimestamp();
+    // On doit récupérer les mêmes filtres que l'interaction originale
+    // Pour simplifier, on récupère tous les objectifs actifs
+    const objectives = await ObjectivesService.getObjectives(guild.id, { status: null, category: null });
 
-    await objectivesChannel.send({ 
-      content: `@everyone`,
-      embeds: [embed] 
-    });
+    if (objectives.length === 0) {
+      await interaction.editReply({ content: '❌ Aucun objectif trouvé.', embeds: [], components: [] });
+      return;
+    }
+
+    const embed = createObjectivesListEmbed(objectives, pageNumber);
+    const components = createObjectivesListComponents(objectives, pageNumber);
+
+    await interaction.editReply({ embeds: [embed], components });
   } catch (error) {
-    logger.error(`Erreur lors de l'annonce de complétion: ${error}`);
+    logger.error(`Erreur lors de la navigation des objectifs: ${error}`);
   }
+}
+
+async function handleObjectiveSelectMenu(interaction: StringSelectMenuInteraction): Promise<void> {
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const objectiveId = interaction.values[0];
+    const objective = await ObjectivesService.getObjectiveById(objectiveId);
+
+    if (!objective) {
+      await interaction.editReply('❌ Objectif non trouvé.');
+      return;
+    }
+
+    const embed = await ObjectivesService.createObjectiveEmbed(objective);
+    const buttons = ObjectivesService.createObjectiveButtons(objective);
+
+    await interaction.editReply({ embeds: [embed], components: buttons });
+  } catch (error) {
+    logger.error(`Erreur lors de l'affichage de l'objectif sélectionné: ${error}`);
+    await interaction.editReply('❌ Erreur lors du chargement de l\'objectif.');
+  }
+}
+
+// Fonctions utilitaires pour créer les composants de la liste
+function createObjectivesListEmbed(objectives: any[], currentPage: number): EmbedBuilder {
+  const itemsPerPage = 5;
+  const startIndex = currentPage * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, objectives.length);
+  const currentObjectives = objectives.slice(startIndex, endIndex);
+  
+  const totalPages = Math.ceil(objectives.length / itemsPerPage);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle('📋 Liste des objectifs')
+    .setDescription(`Total: ${objectives.length} objectif(s) • Page ${currentPage + 1}/${totalPages}\n\n` +
+      '🔽 **Sélectionnez un objectif ci-dessous pour le voir en détail**')
+    .setTimestamp();
+
+  currentObjectives.forEach((obj, index) => {
+    const priorityEmoji = ['⚠️', '🔴', '🟡', '🟢', '⚪'][obj.priority - 1];
+    const statusEmoji = obj.status === 'ACTIVE' ? '🔄' : obj.status === 'COMPLETED' ? '✅' : '❌';
+    const progress = ObjectivesService.calculateProgress(obj);
+    
+    embed.addFields({
+      name: `${startIndex + index + 1}. ${priorityEmoji} ${obj.title}`,
+      value: `${statusEmoji} **${obj.category}** • Progression: ${progress}%`,
+      inline: false,
+    });
+  });
+
+  return embed;
+}
+
+function createObjectivesListComponents(objectives: any[], currentPage: number): ActionRowBuilder<any>[] {
+  const itemsPerPage = 5;
+  const startIndex = currentPage * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, objectives.length);
+  const currentObjectives = objectives.slice(startIndex, endIndex);
+  const totalPages = Math.ceil(objectives.length / itemsPerPage);
+
+  const components: ActionRowBuilder<any>[] = [];
+
+  // Menu de sélection des objectifs
+  if (currentObjectives.length > 0) {
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId('objective_select')
+      .setPlaceholder('Sélectionner un objectif à voir...')
+      .addOptions(
+        currentObjectives.map((obj) => ({
+          label: obj.title.length > 100 ? obj.title.substring(0, 97) + '...' : obj.title,
+          description: `${obj.category} • ${ObjectivesService.calculateProgress(obj)}% complété`,
+          value: obj.objectiveId,
+          emoji: ['⚠️', '🔴', '🟡', '🟢', '⚪'][obj.priority - 1],
+        }))
+      );
+
+    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu));
+  }
+
+  // Boutons de navigation si nécessaire
+  if (totalPages > 1) {
+    const navigationRow = new ActionRowBuilder<ButtonBuilder>();
+
+    navigationRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`objectives_page_${Math.max(0, currentPage - 1)}`)
+        .setLabel('◀ Précédent')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0),
+      
+      new ButtonBuilder()
+        .setCustomId('objectives_page_info')
+        .setLabel(`Page ${currentPage + 1}/${totalPages}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      
+      new ButtonBuilder()
+        .setCustomId(`objectives_page_${Math.min(totalPages - 1, currentPage + 1)}`)
+        .setLabel('Suivant ▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === totalPages - 1)
+    );
+
+    components.push(navigationRow);
+  }
+
+  return components;
 }

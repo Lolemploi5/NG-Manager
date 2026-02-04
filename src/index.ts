@@ -8,6 +8,13 @@ import { startHealthServer } from './web/health';
 import { startTaxScheduler } from './features/taxes/taxes.scheduler';
 import { startLeaderboardScheduler } from './features/leaderboard/leaderboard.scheduler';
 
+// Stocker le client globalement pour les mises à jour automatiques
+let globalClient: any = null;
+
+export function getClient() {
+  return globalClient;
+}
+
 async function main(): Promise<void> {
   logger.info('🚀 Démarrage de NG Manager...');
 
@@ -16,6 +23,9 @@ async function main(): Promise<void> {
 
   // Création du client Discord
   const client = createClient();
+  
+  // Stocker le client globalement
+  globalClient = client;
 
   // Enregistrement des événements
   client.on('clientReady', async () => {
