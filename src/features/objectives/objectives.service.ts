@@ -1,6 +1,7 @@
 import { Objective, ObjectiveCategory } from '../../db/models/Objective';
+import { DashboardMessage } from '../../db/models/GuildConfig';
 import { generateShortId } from '../../utils/uuid';
-import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import { logger } from '../../utils/logger';
 
 export class ObjectivesService {
@@ -71,15 +72,34 @@ export class ObjectivesService {
     }
 
     let totalCriteria = objective.criteria.length;
-    let completedCriteria = 0;
+    let totalPercentage = 0;
 
     for (const criterion of objective.criteria) {
-      if (criterion.targetNumber && criterion.currentProgress >= criterion.targetNumber) {
-        completedCriteria++;
+      // Recalculer dynamiquement le currentProgress à partir des contributions approuvées
+      let actualProgress = 0;
+      if (criterion.contributions && criterion.contributions.length > 0) {
+        actualProgress = criterion.contributions
+          .filter((contrib: any) => contrib.status === 'APPROVED')
+          .reduce((total: number, contrib: any) => total + contrib.amount, 0);
       }
+
+      // Utiliser le progrès dynamique ou le stocké (prendre le max pour éviter les désynchronisations)
+      const progress = Math.max(actualProgress, criterion.currentProgress || 0);
+      
+      // Calculer le pourcentage de ce critère
+      let criterionPercentage = 0;
+      if (criterion.targetNumber && criterion.targetNumber > 0) {
+        criterionPercentage = Math.min(100, (progress / criterion.targetNumber) * 100);
+      } else {
+        // Si pas de target défini, considérer comme complété si au moins 1 contribution approuvée
+        criterionPercentage = progress > 0 ? 100 : 0;
+      }
+      
+      totalPercentage += criterionPercentage;
     }
 
-    return Math.round((completedCriteria / totalCriteria) * 100);
+    // Retourner la moyenne des pourcentages de tous les critères
+    return Math.round(totalPercentage / totalCriteria);
   }
 
   static async createObjectiveEmbed(objective: any): Promise<EmbedBuilder> {
@@ -119,11 +139,21 @@ export class ObjectivesService {
     if (objective.criteria && objective.criteria.length > 0) {
       const criteriaText = objective.criteria.map((c: any) => {
         const typeEmoji = this.getCriterionTypeEmoji(c.type);
-        const progress = c.targetNumber ? `${c.currentProgress}/${c.targetNumber}` : `${c.currentProgress}`;
+        
+        // Recalculer le progrès dynamiquement comme dans calculateProgress
+        let actualProgress = 0;
+        if (c.contributions && c.contributions.length > 0) {
+          actualProgress = c.contributions
+            .filter((contrib: any) => contrib.status === 'APPROVED')
+            .reduce((total: number, contrib: any) => total + contrib.amount, 0);
+        }
+        const progress = Math.max(actualProgress, c.currentProgress || 0);
+        
+        const progressDisplay = c.targetNumber ? `${progress}/${c.targetNumber}` : `${progress}`;
         const unit = c.unit || '';
-        const percentage = c.targetNumber ? Math.round((c.currentProgress / c.targetNumber) * 100) : 0;
+        const percentage = c.targetNumber && c.targetNumber > 0 ? Math.min(100, Math.round((progress / c.targetNumber) * 100)) : (progress > 0 ? 100 : 0);
         const bar = this.createProgressBar(percentage, 10);
-        return `${typeEmoji} **${c.title}**\n${bar} ${progress} ${unit} (${percentage}%)\n*ID: \`${c.criterionId}\`*`;
+        return `${typeEmoji} **${c.title}**\n${bar} ${progressDisplay} ${unit} (${percentage}%)\n*ID: \`${c.criterionId}\`*`;
       }).join('\n\n');
 
       embed.addFields({ name: '📋 Critères', value: criteriaText || 'Aucun critère', inline: false });
@@ -343,4 +373,50 @@ export class ObjectivesService {
     await objective.save();
     return objective;
   }
-}
+
+  static async updateDashboardMessage(guildId: string): Promise<void> {
+    try {
+      // Importer le client de manière dynamique pour éviter les dépendances circulaires
+      const { getClient } = await import('../../index');
+      const client = getClient();
+      
+      if (!client) {
+        logger.warn('Client Discord non disponible pour la mise à jour du dashboard');
+        return;
+      }
+
+      const guild = await client.guilds.fetch(guildId);
+      if (!guild) return;
+
+      const dashboardData = await DashboardMessage.findOne({ guildId }).lean();
+      if (!dashboardData) return;
+
+      const channel = await guild.channels.fetch(dashboardData.channelId);
+      if (!channel || channel.type !== ChannelType.GuildText) return;
+
+      const message = await channel.messages.fetch(dashboardData.messageId).catch(() => null);
+      if (!message) {
+        // Le message a été supprimé, supprimer la référence
+        await DashboardMessage.deleteOne({ guildId });
+        return;
+      }
+
+      const embed = await this.generateDashboardEmbed(guildId);
+      await message.edit({ embeds: [embed] });
+      logger.info(`Dashboard mis à jour automatiquement pour la guild ${guildId}`);
+    } catch (error) {
+      logger.error(`Erreur lors de la mise à jour automatique du dashboard: ${error}`);
+    }
+  }
+
+  static async saveDashboardMessage(guildId: string, messageId: string, channelId: string): Promise<void> {
+    try {
+      await DashboardMessage.findOneAndUpdate(
+        { guildId },
+        { guildId, messageId, channelId },
+        { upsert: true }
+      );
+    } catch (error) {
+      logger.error(`Erreur lors de la sauvegarde du message dashboard: ${error}`);
+    }
+  }}

@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, MessageFlags, ChannelType } from 'discord.js';
+import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, MessageFlags, ChannelType, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { GuildConfig } from '../../db/models/GuildConfig';
 import { ObjectivesService } from './objectives.service';
 import { logger } from '../../utils/logger';
@@ -108,7 +108,7 @@ async function handleCreateObjective(interaction: any): Promise<void> {
 }
 
 async function handleListObjectives(interaction: any): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const guild = interaction.guild;
@@ -131,30 +131,13 @@ async function handleListObjectives(interaction: any): Promise<void> {
       return;
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('📋 Liste des objectifs')
-      .setDescription(`Total: ${objectives.length} objectif(s)`)
-      .addFields(
-        objectives.slice(0, 10).map((obj) => {
-          const priorityEmoji = ['⚠️', '🔴', '🟡', '🟢', '⚪'][obj.priority - 1];
-          const statusEmoji = obj.status === 'ACTIVE' ? '🔄' : obj.status === 'COMPLETED' ? '✅' : '❌';
-          const progress = ObjectivesService.calculateProgress(obj);
-          
-          return {
-            name: `${priorityEmoji} ${obj.title}`,
-            value: `${statusEmoji} **${obj.category}** • Progression: ${progress}%\nID: \`${obj.objectiveId}\``,
-            inline: false,
-          };
-        })
-      )
-      .setTimestamp();
+    // Créer l'embed principal
+    const embed = createObjectivesListEmbedLocal(objectives, 0);
 
-    if (objectives.length > 10) {
-      embed.setFooter({ text: 'Affichage limité à 10 objectifs' });
-    }
+    // Créer les composants interactifs
+    const components = createObjectivesListComponentsLocal(objectives, 0);
 
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed], components });
   } catch (error) {
     logger.error(`Erreur lors de la liste des objectifs: ${error}`);
     if (error instanceof Error) {
@@ -165,7 +148,7 @@ async function handleListObjectives(interaction: any): Promise<void> {
 }
 
 async function handleViewObjective(interaction: any): Promise<void> {
-  await interaction.deferReply();
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
     const objectiveId = interaction.options.getString('objectif_id');
@@ -226,11 +209,13 @@ async function handleDashboard(interaction: any): Promise<void> {
     if (dashboardMessage) {
       // Mettre à jour le message existant
       await dashboardMessage.edit({ embeds: [embed] });
+      await ObjectivesService.saveDashboardMessage(guild.id, dashboardMessage.id, objectivesChannel.id);
       await interaction.editReply('✅ Dashboard mis à jour!');
       logger.info(`Dashboard mis à jour pour la guild ${guild.id}`);
     } else {
       // Créer un nouveau message
-      await objectivesChannel.send({ embeds: [embed] });
+      const newMessage = await objectivesChannel.send({ embeds: [embed] });
+      await ObjectivesService.saveDashboardMessage(guild.id, newMessage.id, objectivesChannel.id);
       await interaction.editReply('✅ Dashboard créé et affiché dans le salon objectifs!');
       logger.info(`Nouveau dashboard créé pour la guild ${guild.id}`);
     }
@@ -373,4 +358,91 @@ export function createContributionModal(objectiveId: string, criterionId: string
           .setRequired(false)
       )
     );
+}
+
+// Fonctions utilitaires pour la liste interactive
+function createObjectivesListEmbedLocal(objectives: any[], currentPage: number): EmbedBuilder {
+  const itemsPerPage = 5;
+  const startIndex = currentPage * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, objectives.length);
+  const currentObjectives = objectives.slice(startIndex, endIndex);
+  
+  const totalPages = Math.ceil(objectives.length / itemsPerPage);
+
+  const embed = new EmbedBuilder()
+    .setColor(0x5865F2)
+    .setTitle('📋 Liste des objectifs')
+    .setDescription(`Total: ${objectives.length} objectif(s) • Page ${currentPage + 1}/${totalPages}\n\n` +
+      '🔽 **Sélectionnez un objectif ci-dessous pour le voir en détail**')
+    .setTimestamp();
+
+  currentObjectives.forEach((obj, index) => {
+    const priorityEmoji = ['⚠️', '🔴', '🟡', '🟢', '⚪'][obj.priority - 1];
+    const statusEmoji = obj.status === 'ACTIVE' ? '🔄' : obj.status === 'COMPLETED' ? '✅' : '❌';
+    const progress = ObjectivesService.calculateProgress(obj);
+    
+    embed.addFields({
+      name: `${startIndex + index + 1}. ${priorityEmoji} ${obj.title}`,
+      value: `${statusEmoji} **${obj.category}** • Progression: ${progress}%`,
+      inline: false,
+    });
+  });
+
+  return embed;
+}
+
+function createObjectivesListComponentsLocal(objectives: any[], currentPage: number): ActionRowBuilder<any>[] {
+  const itemsPerPage = 5;
+  const startIndex = currentPage * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, objectives.length);
+  const currentObjectives = objectives.slice(startIndex, endIndex);
+  const totalPages = Math.ceil(objectives.length / itemsPerPage);
+
+  const components: ActionRowBuilder<any>[] = [];
+
+  // Menu de sélection des objectifs
+  if (currentObjectives.length > 0) {
+    const selectMenu = new StringSelectMenuBuilder()
+      .setCustomId('objective_select')
+      .setPlaceholder('Sélectionner un objectif à voir...')
+      .addOptions(
+        currentObjectives.map((obj) => ({
+          label: obj.title.length > 100 ? obj.title.substring(0, 97) + '...' : obj.title,
+          description: `${obj.category} • ${ObjectivesService.calculateProgress(obj)}% complété`,
+          value: obj.objectiveId,
+          emoji: ['⚠️', '🔴', '🟡', '🟢', '⚪'][obj.priority - 1],
+        }))
+      );
+
+    components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu));
+  }
+
+  // Boutons de navigation si nécessaire
+  if (totalPages > 1) {
+    const navigationRow = new ActionRowBuilder<ButtonBuilder>();
+
+    navigationRow.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`objectives_page_${Math.max(0, currentPage - 1)}`)
+        .setLabel('◀ Précédent')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === 0),
+      
+      new ButtonBuilder()
+        .setCustomId('objectives_page_info')
+        .setLabel(`Page ${currentPage + 1}/${totalPages}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      
+      new ButtonBuilder()
+        .setCustomId(`objectives_page_${Math.min(totalPages - 1, currentPage + 1)}`)
+        .setLabel('Suivant ▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(currentPage === totalPages - 1)
+    );
+
+    components.push(navigationRow);
+  }
+
+  return components;
 }
