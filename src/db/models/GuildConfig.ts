@@ -22,13 +22,7 @@ export interface IGuildConfig extends Document {
     countryTaxRate: number;
     defaultCompanyTaxRate: number;
   };
-  reminders: {
-    taxes: {
-      enabled: boolean;
-      mode: 'DAYS' | 'WEEKS' | 'MONTHS';
-      every: number;
-    };
-  };
+  // Suppression du système de rappel automatique
   leaderboard: {
     enabled: boolean;
     channelId?: string;
@@ -60,13 +54,7 @@ const GuildConfigSchema = new Schema<IGuildConfig>(
       countryTaxRate: { type: Number, required: true, default: 0.05 },
       defaultCompanyTaxRate: { type: Number, required: true, default: 0.15 },
     },
-    reminders: {
-      taxes: {
-        enabled: { type: Boolean, default: false },
-        mode: { type: String, enum: ['DAYS', 'WEEKS', 'MONTHS'], default: 'WEEKS' },
-        every: { type: Number, default: 1 },
-      },
-    },
+    // Suppression du système de rappel automatique
     leaderboard: {
       enabled: { type: Boolean, default: false },
       channelId: { type: String },

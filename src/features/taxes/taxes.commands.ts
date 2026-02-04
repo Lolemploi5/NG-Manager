@@ -1,3 +1,29 @@
+function buildTaxReminderEmbed(guild: any, summaryByCompany: any, totalGrandDue: number): any {
+  const embed = new EmbedBuilder()
+    .setColor(0xE67E22)
+    .setTitle('📊 Dashboard Impôts Pays')
+    .setDescription('Ce tableau affiche en temps réel les taxes pays dues par chaque entreprise. Il est mis à jour automatiquement à chaque validation de vente ou contrat.')
+    .setThumbnail(guild.iconURL() || null)
+    .addFields({ name: '\u200B', value: '\u200B' });
+  let index = 1;
+  for (const [, data] of Object.entries(summaryByCompany)) {
+    const { name, emoji, type, totalDue, itemCount } = data as any;
+    const itemType = type === 'Build' ? 'contrats' : 'ventes';
+    embed.addFields({
+      name: `${index}. ${emoji} **${name}** (${type})`,
+      value: `**${totalDue.toFixed(2)} 💰** (${itemCount} ${itemType} non payées)`,
+      inline: false,
+    });
+    index++;
+  }
+  embed.addFields(
+    { name: '\u200B', value: '\u200B' },
+    { name: '📈 TOTAL À PAYER', value: `**${totalGrandDue.toFixed(2)} 💰**`, inline: false },
+    { name: '💡 Action', value: 'Utilisez `/impots payer` pour déclarer le paiement. Ce dashboard est mis à jour automatiquement à chaque validation.', inline: false }
+  );
+  embed.setFooter({ text: 'Dashboard impôts pays — actualisé en temps réel' }).setTimestamp();
+  return embed;
+}
 import { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, MessageFlags, EmbedBuilder } from 'discord.js';
 import { logger } from '../../utils/logger';
 import { GuildConfig } from '../../db/models/GuildConfig';
@@ -8,7 +34,7 @@ import { Contract } from '../../db/models/Contract';
 export const taxesCommands = [
   new SlashCommandBuilder()
     .setName('impots')
-    .setDescription('Gestion des impôts')
+    .setDescription('Dashboard et gestion des impôts pays')
     .addSubcommand((sub) =>
       sub
         .setName('config-taux')
@@ -17,17 +43,17 @@ export const taxesCommands = [
     .addSubcommand((sub) =>
       sub
         .setName('payer')
-        .setDescription('Payer les taxes pays de votre entreprise')
+        .setDescription('Déclarer le paiement des taxes pays pour votre entreprise')
     )
     .addSubcommand((sub) =>
       sub
         .setName('resume')
-        .setDescription('Résumé des impôts à payer')
+        .setDescription('Afficher le dashboard impôts en temps réel')
     )
     .addSubcommand((sub) =>
       sub
         .setName('generer')
-        .setDescription('Générer un rappel maintenant')
+        .setDescription('Forcer la mise à jour du dashboard impôts')
     ),
 ];
 
@@ -82,14 +108,15 @@ async function handleConfigTaxRate(interaction: any): Promise<void> {
 
     const rateInput = new TextInputBuilder()
       .setCustomId('country_tax_rate')
-      .setLabel(`Taux de taxe pays (% - Actuellement ${currentRate}%)`)
+      .setCustomId('taxRateInput')
+      .setPlaceholder(`% - Actuellement ${currentRate}`)
       .setStyle(TextInputStyle.Short)
       .setPlaceholder('Ex: 5.50')
       .setValue(currentRate)
       .setRequired(true);
 
     const row = new ActionRowBuilder<TextInputBuilder>().addComponents(rateInput);
-    modal.addComponents(row);
+    modal.addComponents(...[row]);
 
     await interaction.showModal(modal);
   } catch (error) {
@@ -149,14 +176,14 @@ async function handlePayTaxes(interaction: any): Promise<void> {
       .setTitle('Payer les taxes pays');
 
     const amountInput = new TextInputBuilder()
-      .setCustomId('amount_paid')
-      .setLabel(`Montant à payer (Total dû: ${totalDue.toFixed(2)} 💰)`)
-      .setStyle(TextInputStyle.Short)
+      .setCustomId('taxAmountInput')
+      .setLabel(`Montant payé (max ${totalDue.toFixed(2)} 💰)`) // label requis
       .setPlaceholder('Ex: 500.00')
+      .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
     const row = new ActionRowBuilder<TextInputBuilder>().addComponents(amountInput);
-    modal.addComponents(row);
+    modal.addComponents(...[row]);
 
     await interaction.showModal(modal);
   } catch (error) {
@@ -167,95 +194,33 @@ async function handlePayTaxes(interaction: any): Promise<void> {
 
 async function handleResumeTaxes(interaction: any): Promise<void> {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
   try {
     const guildId = interaction.guild?.id;
     if (!guildId) {
       await interaction.editReply('❌ Erreur: serveur non trouvé.');
       return;
     }
-
     const companies = await Company.find({ guildId });
     if (companies.length === 0) {
       await interaction.editReply('❌ Aucune entreprise sur ce serveur.');
       return;
     }
-
-    // Récupérer les ventes et contrats non payés par entreprise
-    const summaryByCompany: any = {};
-
-    for (const company of companies) {
-      let totalDue = 0;
-      let totalItems = 0;
-
-      // Ventes pour entreprises Agricole
-      if (company.type === 'Agricole') {
-        const unpaidSales = await Sale.find({
-          companyId: company.companyId,
-          status: 'APPROVED',
-          countryTaxPaid: false,
-        });
-
-        if (unpaidSales.length > 0) {
-          totalDue += unpaidSales.reduce((sum, sale) => sum + sale.countryTaxAmount, 0);
-          totalItems += unpaidSales.length;
-        }
-      }
-
-      // Contrats pour entreprises Build
-      if (company.type === 'Build') {
-        const unpaidContracts = await Contract.find({
-          companyId: company.companyId,
-          status: 'APPROVED',
-          countryTaxPaid: false,
-        });
-
-        if (unpaidContracts.length > 0) {
-          totalDue += unpaidContracts.reduce((sum, contract) => sum + contract.countryTax, 0);
-          totalItems += unpaidContracts.length;
-        }
-      }
-
-      if (totalItems > 0) {
-        summaryByCompany[company.companyId] = {
-          name: company.name,
-          emoji: company.emoji,
-          type: company.type,
-          totalDue,
-          itemCount: totalItems,
-        };
-      }
-    }
-
+    // Préparer un tableau enrichi temporaire
+    const companiesWithUnpaid = await Promise.all(companies.map(async (company) => {
+      const unpaidSales = company.type === 'Agricole'
+        ? await Sale.find({ companyId: company.companyId, status: 'APPROVED', countryTaxPaid: false })
+        : undefined;
+      const unpaidContracts = company.type === 'Build'
+        ? await Contract.find({ companyId: company.companyId, status: 'APPROVED', countryTaxPaid: false })
+        : undefined;
+      return { ...company.toObject(), unpaidSales, unpaidContracts };
+    }));
+    const { summaryByCompany, totalGrandDue } = getSummaryByCompany(companiesWithUnpaid);
     if (Object.keys(summaryByCompany).length === 0) {
       await interaction.editReply('✅ Aucune taxe pays due actuellement.');
       return;
     }
-
-    const embed = new EmbedBuilder()
-      .setColor(0xE67E22)
-      .setTitle('📊 Résumé des taxes pays dues')
-      .setDescription('Taxes non payées par entreprise')
-      .setTimestamp();
-
-    let totalGrand = 0;
-    for (const [, data] of Object.entries(summaryByCompany)) {
-      const { name, emoji, type, totalDue, itemCount } = data as any;
-      const itemType = type === 'Build' ? 'contrats' : 'ventes';
-      embed.addFields({
-        name: `${emoji} ${name} (${type})`,
-        value: `**${totalDue.toFixed(2)} 💰** (${itemCount} ${itemType} non payées)`,
-        inline: false,
-      });
-      totalGrand += totalDue;
-    }
-
-    embed.addFields({
-      name: '📈 TOTAL',
-      value: `**${totalGrand.toFixed(2)} 💰**`,
-      inline: false,
-    });
-
+    const embed = buildTaxReminderEmbed(interaction.guild, summaryByCompany, totalGrandDue);
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
     logger.error(`Erreur lors du calcul du résumé: ${error}`);
@@ -263,7 +228,103 @@ async function handleResumeTaxes(interaction: any): Promise<void> {
   }
 }
 
+
+// Génère ou met à jour le message de rappel d'impôts dans le salon dédié
+function getSummaryByCompany(companies: any[]): { summaryByCompany: any, totalGrandDue: number } {
+  const summaryByCompany: any = {};
+  let totalGrandDue = 0;
+  for (const company of companies) {
+    let totalDue = 0;
+    let totalItems = 0;
+    // Ventes non payées
+    if (company.type === 'Agricole' && company.unpaidSales) {
+      totalDue += company.unpaidSales.reduce((sum: number, sale: any) => sum + sale.countryTaxAmount, 0);
+      totalItems += company.unpaidSales.length;
+    }
+    // Contrats non payés
+    if (company.type === 'Build' && company.unpaidContracts) {
+      totalDue += company.unpaidContracts.reduce((sum: number, contract: any) => sum + contract.countryTax, 0);
+      totalItems += company.unpaidContracts.length;
+    }
+    if (totalItems > 0) {
+      summaryByCompany[company.companyId] = {
+        name: company.name,
+        emoji: company.emoji,
+        type: company.type,
+        totalDue,
+        itemCount: totalItems,
+      };
+      totalGrandDue += totalDue;
+    }
+  }
+  return { summaryByCompany, totalGrandDue };
+}
+
+export async function upsertTaxReminderMessage(guild: any, config: any): Promise<string> {
+  const taxesChannelId = config.channels.taxesChannelId;
+  if (!taxesChannelId) return '❌ Salon impôts non configuré.';
+  const taxesChannel = await guild.channels.fetch(taxesChannelId).catch(() => null);
+  if (taxesChannel?.type !== 0) return '❌ Salon impôts non trouvé.';
+
+  // Générer l'embed (copie de la logique du scheduler)
+
+  // Pré-charger les ventes/contrats impayés pour chaque entreprise
+  const companies = await Company.find({ guildId: config.guildId });
+  if (companies.length === 0) return '❌ Aucune entreprise sur ce serveur.';
+  const companiesWithUnpaid = await Promise.all(companies.map(async (company) => {
+    const unpaidSales = company.type === 'Agricole'
+      ? await Sale.find({ companyId: company.companyId, status: 'APPROVED', countryTaxPaid: false })
+      : undefined;
+    const unpaidContracts = company.type === 'Build'
+      ? await Contract.find({ companyId: company.companyId, status: 'APPROVED', countryTaxPaid: false })
+      : undefined;
+    return { ...company.toObject(), unpaidSales, unpaidContracts };
+  }));
+  const { summaryByCompany, totalGrandDue } = getSummaryByCompany(companiesWithUnpaid);
+  if (totalGrandDue === 0) return '✅ Aucune taxe à payer pour le moment.';
+
+  const embed = buildTaxReminderEmbed(guild, summaryByCompany, totalGrandDue);
+
+  // Chercher un message existant (par titre d'embed)
+  const messages = await taxesChannel.messages.fetch({ limit: 10 });
+  let reminderMessage = null;
+  for (const message of messages.values()) {
+    if (message.embeds.length > 0 && message.embeds[0].title === '🏛️ RAPPEL - Taxes Pays à Payer') {
+      reminderMessage = message;
+      break;
+    }
+  }
+  // Ping roles chef + cadre
+  const pingRoles = [config.roles.chefRoleId, config.roles.officerRoleId];
+  const mentions = pingRoles.map((roleId: string) => `<@&${roleId}>`).join(' ');
+
+  if (reminderMessage) {
+    await reminderMessage.edit({ content: mentions, embeds: [embed] });
+    return '✅ Rappel d\'impôts mis à jour !';
+  } else {
+    await taxesChannel.send({ content: mentions, embeds: [embed] });
+    return '✅ Nouveau rappel d\'impôts créé !';
+  }
+}
+
+
 async function handleGenerateTaxReminder(interaction: any): Promise<void> {
-  // À implémenter avec le scheduler
-  await interaction.reply({ content: '⏳ Génération du rappel en cours...', flags: MessageFlags.Ephemeral });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  try {
+    const guild = interaction.guild;
+    if (!guild) {
+      await interaction.editReply('❌ Cette commande doit être utilisée sur un serveur.');
+      return;
+    }
+    const config = await GuildConfig.findOne({ guildId: guild.id });
+    if (!config) {
+      await interaction.editReply('❌ Configuration non trouvée.');
+      return;
+    }
+    const result = await upsertTaxReminderMessage(guild, config);
+    await interaction.editReply(result);
+  } catch (error) {
+    logger.error(`Erreur lors de la génération du rappel d'impôts: ${error}`);
+    await interaction.editReply('❌ Erreur lors de la génération du rappel d\'impôts.');
+  }
 }

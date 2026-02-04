@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
 import { Company } from '../../db/models/Company';
 import { Sale } from '../../db/models/Sale';
 import { logger } from '../../utils/logger';
@@ -207,8 +207,12 @@ async function handleSubmitSale(interaction: any): Promise<void> {
       return await handleDirectSubmission(interaction, contextCompany, userRole, channel);
     }
 
-    // Sinon, logique de sélection d'entreprise (comme avant)
-    return await handleCompanySelection(interaction, guild, member);
+    // Sinon, refuser la commande
+    await interaction.reply({
+      content: '❌ Cette commande doit être utilisée dans un salon d\'entreprise (ventes ou confirmations).',
+      flags: MessageFlags.Ephemeral
+    });
+    return;
 
   } catch (error) {
     logger.error(`Erreur lors de la soumission: ${error}`);
@@ -272,66 +276,7 @@ async function handleDirectSubmission(interaction: any, company: any, userRole: 
   }
 }
 
-async function handleCompanySelection(interaction: any, guild: any, member: any): Promise<void> {
-  try {
-    // Logique de sélection d'entreprise quand pas dans un salon spécifique
-    const allCompanies = await Company.find({ guildId: guild.id });
-
-    if (allCompanies.length === 0) {
-      await interaction.reply('❌ Aucune entreprise créée sur ce serveur.');
-      return;
-    }
-
-    // Filtrer les entreprises où l'utilisateur a un rôle
-    const userCompanies = allCompanies.filter(company => {
-      const hasRole = member.roles.cache.has(company.roles.ceoRoleId) ||
-                      member.roles.cache.has(company.roles.managerRoleId) ||
-                      member.roles.cache.has(company.roles.employeeRoleId);
-      return hasRole;
-    });
-
-    if (userCompanies.length === 0) {
-      await interaction.reply('❌ Vous devez avoir un rôle dans une entreprise pour soumettre.');
-      return;
-    }
-
-    // Si l'utilisateur a un seul rôle d'entreprise, montrer directement le modal approprié
-    if (userCompanies.length === 1) {
-      const company = userCompanies[0];
-      if (company.type === 'Build') {
-        const modal = createContractModal(company.companyId);
-        await interaction.showModal(modal);
-      } else {
-        const modal = createSaleModal(company.companyId);
-        await interaction.showModal(modal);
-      }
-      return;
-    }
-
-    // Si plusieurs entreprises, créer un select menu
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId('sale_company_select')
-      .setPlaceholder('Choisir une entreprise')
-      .addOptions(
-        userCompanies.map((company) => ({
-          label: `${company.emoji} ${company.name}`,
-          value: company.companyId,
-          description: `Type: ${company.type} - ${company.type === 'Build' ? 'Contrat' : 'Vente'}`,
-        }))
-      );
-
-    const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
-
-    await interaction.reply({
-      content: '📦 Sélectionne une entreprise pour soumettre:',
-      components: [row],
-    });
-  } catch (error) {
-    logger.error(`Erreur lors de la soumission de vente: ${error}`);
-    await interaction.reply('❌ Erreur lors du chargement des entreprises.');
-  }
-}
-
+// Fonction de sélection d'entreprise supprimée — la commande est désormais contextuelle au salon
 async function handleListSales(interaction: any): Promise<void> {
   await interaction.deferReply();
 

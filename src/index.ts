@@ -5,7 +5,6 @@ import { createClient } from './client/createClient';
 import { registerCommands } from './client/registerCommands';
 import { handleInteraction } from './handlers/interactionHandler';
 import { startHealthServer } from './web/health';
-import { startTaxScheduler } from './features/taxes/taxes.scheduler';
 import { startLeaderboardScheduler } from './features/leaderboard/leaderboard.scheduler';
 
 // Stocker le client globalement pour les mises à jour automatiques
@@ -34,8 +33,6 @@ async function main(): Promise<void> {
     // Enregistrer les commandes
     await registerCommands(env.DISCORD_CLIENT_ID, env.DISCORD_TOKEN, env.DEV_GUILD_ID);
 
-    // Démarrer les schedulers
-    startTaxScheduler(client);
     startLeaderboardScheduler(client);
   });
 

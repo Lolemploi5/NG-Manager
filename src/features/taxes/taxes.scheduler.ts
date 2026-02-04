@@ -1,3 +1,4 @@
+// Suppression complète du scheduler d'impôts pour ne garder que la mise à jour manuelle/automatique du dashboard.
 import cron from 'node-cron';
 import { Client, EmbedBuilder, ChannelType } from 'discord.js';
 import { GuildConfig } from '../../db/models/GuildConfig';

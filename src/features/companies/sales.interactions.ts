@@ -9,6 +9,7 @@ import { calculateSaleTaxes } from './sales.service';
 import { calculateContractTaxes } from './contracts.service';
 import { createSaleModal } from './companies.commands';
 import { getCereal } from './cereals';
+import { upsertTaxReminderMessage } from '../taxes/taxes.commands';
 
 export async function handleSaleButton(interaction: ButtonInteraction): Promise<void> {
   const [, action] = interaction.customId.split('_');
@@ -264,6 +265,16 @@ async function handleApproveSale(interaction: ButtonInteraction): Promise<void> 
     sale.validatedBy = interaction.user.id;
     sale.validatedAt = new Date();
     await sale.save();
+
+    // Mise à jour automatique du rappel d'impôts
+    try {
+      const config = await GuildConfig.findOne({ guildId: interaction.guild?.id });
+      if (config) {
+        await upsertTaxReminderMessage(interaction.guild, config);
+      }
+    } catch (err) {
+      logger.warn('Impossible de mettre à jour le rappel impôts : ' + err);
+    }
 
     const embed = new EmbedBuilder()
       .setColor(0x57F287)
@@ -865,6 +876,16 @@ async function handleApproveContract(interaction: ButtonInteraction): Promise<vo
     contract.approvedAt = new Date();
     await contract.save();
 
+    // Mise à jour automatique du rappel d'impôts
+    try {
+      const config = await GuildConfig.findOne({ guildId: interaction.guild?.id });
+      if (config) {
+        await upsertTaxReminderMessage(interaction.guild, config);
+      }
+    } catch (err) {
+      logger.warn('Impossible de mettre à jour le rappel impôts : ' + err);
+    }
+
     await interaction.editReply(`✅ Contrat ${contractId} approuvé! Les employés recevront ${contract.perEmployeeAmount.toFixed(2)} 💰 chacun.`);
 
     // Mettre à jour le message dans le salon ventes
@@ -883,6 +904,7 @@ async function handleApproveContract(interaction: ButtonInteraction): Promise<vo
               { name: '🎯 Client', value: contract.clientCountry || `@${contract.clientPlayer}`, inline: true },
               { name: '👷 Employés', value: `${contract.employeeCount} participant(s)`, inline: true },
               { name: '💰 Montant total', value: `${contract.contractAmount.toFixed(2)} 💰`, inline: true },
+              { name: '🏛️ Taxe pays', value: `${contract.countryTax?.toFixed(2) ?? '0.00'} 💰`, inline: true },
               { name: '💵 Par employé', value: `**${contract.perEmployeeAmount.toFixed(2)} 💰**`, inline: true },
               { name: '✅ Approuvé par', value: `<@${interaction.user.id}>`, inline: true }
             )

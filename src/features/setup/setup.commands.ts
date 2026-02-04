@@ -265,13 +265,6 @@ async function handleSetupInit(interaction: ChatInputCommandInteraction): Promis
         countryTaxRate,
         defaultCompanyTaxRate,
       },
-      reminders: {
-        taxes: {
-          enabled: false,
-          mode: 'WEEKS',
-          every: 1,
-        },
-      },
       leaderboard: {
         enabled: false,
       },
